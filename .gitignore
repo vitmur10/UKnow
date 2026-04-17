@@ -1,1 +1,32 @@
 /.venv/
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+venv/
+ENV/
+env/
+
+# --- IDE & Editors ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Logs & Data (Парсинг) ---
+*.log
+logs/
+data/
+# Якщо ти хочеш ігнорувати конкретні файли з результатами:
+all_usernames.txt
+*.csv
+*.json
+temp_data/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Infrastructure ---
+.python-version
