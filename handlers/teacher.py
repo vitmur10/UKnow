@@ -1,3 +1,14 @@
+import sqlite3
+from datetime import datetime, timedelta
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup
+from telegram.ext import ContextTypes, ConversationHandler
+
+from database.db_manager import db
+from utils.keyboards import get_main_keyboard, get_calendar_keyboard, get_chat_active_keyboard
+from utils.helpers import format_lesson_time
+from config.settings import TEACHER_CHAT_ACTIVE, TEACHER_MESSAGE_SELECT
+
+
 async def teacher_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
@@ -17,6 +28,7 @@ async def teacher_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard('teacher')
     )
 
+
 async def list_teacher_students(update, context):
     query = update.callback_query
     await query.answer()
@@ -25,7 +37,8 @@ async def list_teacher_students(update, context):
     students = db.get_teacher_students(teacher_id)
 
     if not students:
-        await query.edit_message_text("На жаль, у вас ще немає учнів.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="back_to_teacher_menu")]]))
+        await query.edit_message_text("На жаль, у вас ще немає учнів.", reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("⬅️ Назад", callback_data="back_to_teacher_menu")]]))
         return
 
     keyboard = []
@@ -36,7 +49,8 @@ async def list_teacher_students(update, context):
     keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_teacher_menu")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("👥 **Оберіть учня, щоб переглянути історію чату:**", reply_markup=reply_markup, parse_mode='HTML')
+    await query.edit_message_text("👥 **Оберіть учня, щоб переглянути історію чату:**", reply_markup=reply_markup,
+                                  parse_mode='HTML')
 
 
 async def show_students(update, context):
@@ -47,7 +61,8 @@ async def show_students(update, context):
     students = db.get_teacher_students(teacher_id)
 
     if not students:
-        await query.edit_message_text("На жаль, у вас ще немає учнів.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="back_to_teacher_menu")]]))
+        await query.edit_message_text("На жаль, у вас ще немає учнів.", reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("⬅️ Назад", callback_data="back_to_teacher_menu")]]))
         return
 
     keyboard = []
@@ -58,7 +73,8 @@ async def show_students(update, context):
     keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_teacher_menu")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("👥 **Оберіть учня, щоб переглянути історію чату:**", reply_markup=reply_markup, parse_mode='HTML')
+    await query.edit_message_text("👥 **Оберіть учня, щоб переглянути історію чату:**", reply_markup=reply_markup,
+                                  parse_mode='HTML')
 
 
 async def show_groups(update, context):
@@ -69,7 +85,8 @@ async def show_groups(update, context):
     groups = db.get_teacher_groups(teacher_id)
 
     if not groups:
-        await query.edit_message_text("Ви не прив'язані до жодної групи.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="back_to_teacher_menu")]]))
+        await query.edit_message_text("Ви не прив'язані до жодної групи.", reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("⬅️ Назад", callback_data="back_to_teacher_menu")]]))
         return
 
     keyboard = []
@@ -79,7 +96,8 @@ async def show_groups(update, context):
     keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_teacher_menu")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text("👥 **Оберіть групу, щоб переглянути історію чату:**", reply_markup=reply_markup, parse_mode='HTML')
+    await query.edit_message_text("👥 **Оберіть групу, щоб переглянути історію чату:**", reply_markup=reply_markup,
+                                  parse_mode='HTML')
 
 
 async def teacher_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -227,3 +245,185 @@ async def show_teacher_chat_history(update: Update, context: ContextTypes.DEFAUL
         "📖 Історія переписок\n\nОберіть чат для перегляду:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+
+
+# --- ІНЛАЙН КНОПКИ ВИКЛАДАЧА ---
+async def teacher_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    user_id = query.from_user.id
+    # --- 📬 ВХІДНІ (INBOX) ---
+    if data.startswith("inbox_open_"):
+        student_id = int(data.split("_")[2])
+        await teacher_inbox_open(query, context, student_id)
+        return
+    elif data == "inbox_back":
+        # Повернення до списку вхідніх
+        teacher_id = query.from_user.id
+        unread_list = db.get_unread_count_per_student(teacher_id)
+        if not unread_list:
+            await query.edit_message_text("📭 Нових повідомлень немає.")
+            return
+        keyboard = []
+        for sid, fn, ln, count, last_time, last_msg in unread_list:
+            preview = (last_msg or "")[:30].replace("\n", " ")
+            if len(last_msg or "") > 30:
+                preview += "…"
+            keyboard.append([InlineKeyboardButton(
+                f"🔴 {fn} {ln}  [{count} нових]  {preview}",
+                callback_data=f"inbox_open_{sid}"
+            )])
+        total = sum(r[3] for r in unread_list)
+        await query.edit_message_text(
+            f"📬 <b>Вхідні</b> — {total} нових повідомлень\n\nОберіть учня:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='HTML'
+        )
+        return
+    elif data == "schedule_today":
+        today = datetime.now().date()
+        lessons = db.get_teacher_lessons(user_id, today)
+
+        if not lessons:
+            text = f"📅 Розклад на сьогодні ({today.strftime('%d.%m.%Y')})\n\n❌ Уроків немає"
+        else:
+            text = f"📅 Розклад на сьогодні ({today.strftime('%d.%m.%Y')})\n\n"
+            for lesson in lessons:
+                lesson_time = format_lesson_time(lesson[5])  # ИСПРАВЛЕНО: lesson_time это индекс 5
+                if lesson[2]:  # individual lesson
+                    student_name = f"{lesson[9]} {lesson[10]}" if lesson[9] and lesson[
+                        10] else "Невідомо"  # ИСПРАВЛЕНО: индексы 9,10
+                    text += f"📚 Час: {lesson_time}\n"
+                    text += f"    👨‍🎓 Учень: {student_name} (індивідуально)\n\n"
+                else:  # group lesson
+                    group_name = lesson[11] if lesson[11] else "Невідомо"  # ИСПРАВЛЕНО: group_name это индекс 11
+                    text += f"📚 Час: {lesson_time}\n"
+                    text += f"    👥 Група: {group_name}\n\n"
+
+        keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="back_schedule")]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    elif data == "schedule_week":
+        lessons = db.get_teacher_lessons(user_id)
+
+        if not lessons:
+            text = "📆 Розклад на тиждень\n\n❌ Уроків немає"
+        else:
+            text = "📆 Розклад на тиждень\n\n"
+            current_date = None
+            for lesson in lessons[:14]:
+                lesson_date = lesson[4]
+
+                if lesson_date != current_date:
+                    current_date = lesson_date
+                    try:
+                        date_obj = datetime.strptime(current_date, '%Y-%m-%d').date()
+                        formatted_date = date_obj.strftime('%d.%m.%Y')
+                        weekday_names = ['Понеділок', 'Вівторок', 'Середа', 'Четвер', "П'ятниця", 'Субота', 'Неділя']
+                        weekday = weekday_names[date_obj.weekday()]
+                        text += f"\n📅 {formatted_date} ({weekday})\n"
+                    except:
+                        text += f"\n📅 {current_date}\n"
+
+                lesson_time = format_lesson_time(lesson[5])
+
+                # --- ОНОВЛЕНА ЛОГІКА ВИВОДУ (УЧЕНЬ АБО ГРУПА) ---
+                if lesson[2]:  # Індивідуальний учень
+                    first_name = lesson[9] if (len(lesson) > 9 and lesson[9]) else ""
+                    last_name = lesson[10] if (len(lesson) > 10 and lesson[10]) else ""
+                    full_name = f"{first_name} {last_name}".strip()
+                    student_name = full_name if full_name else "Учень"
+
+                    text += f"  📚 Час: {lesson_time}\n"
+                    text += f"      👨‍🎓 Учень: {student_name} (індивідуально)\n"
+
+                elif lesson[3]:  # Груповий урок
+                    g_id = lesson[3]
+                    # Намагаємось дістати назву групи з бази за її ID
+                    group_info = db.get_group(g_id)
+                    if group_info:
+                        g_name = group_info[1]  # Індекс 1 — це зазвичай назва групи
+                    else:
+                        # Якщо в базі не знайшли, пробуємо взяти з результату запиту
+                        g_name = lesson[11] if (len(lesson) > 11 and lesson[11]) else "Група"
+
+                    text += f"  📚 Час: {lesson_time}\n"
+                    text += f"      👥 Група: {g_name}\n"
+
+        keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="back_schedule")]]
+        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    elif data == "schedule_calendar":
+        now = datetime.now()
+        calendar_keyboard = get_calendar_keyboard(now.year, now.month)
+        await query.edit_message_text(
+            "📅 Оберіть дату для перегляду розкладу:",
+            reply_markup=calendar_keyboard
+        )
+        return
+    elif data == "back_schedule" or data == "back_to_schedule":
+        keyboard = [
+            [InlineKeyboardButton("📅 Сьогодні", callback_data="schedule_today")],
+            [InlineKeyboardButton("📆 На тиждень", callback_data="schedule_week")],
+            [InlineKeyboardButton("🗓 Календар", callback_data="schedule_calendar")],
+            [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_menu")]
+        ]
+        await query.edit_message_text(
+            "📆 Мій розклад\n\nОберіть період для перегляду:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+
+# --- ТЕКСТОВІ КНОПКИ ВИКЛАДАЧА ---
+async def menu_teacher_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("📅 Сьогодні", callback_data="schedule_today")],
+        [InlineKeyboardButton("📆 На тиждень", callback_data="schedule_week")],
+        [InlineKeyboardButton("🗓 Календар", callback_data="schedule_calendar")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_menu")]
+    ]
+    await update.message.reply_text("📆 Мій розклад\n\nОберіть період для перегляду:",
+                                    reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def menu_teacher_students(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    students = db.get_teacher_students(user_id)
+    if not students:
+        await update.message.reply_text("У вас ще немає учнів.")
+    else:
+        text = "👨‍🎓 Мої учні:\n\n"
+        for student in students:
+            # Добавляем только эту проверку. Если данных нет — пропускаем итерацию.
+            if not student:
+                continue
+
+            # Используем .get или проверку на None для каждой строки, чтобы не вылетало
+            first_name = student[2] if student[2] else "Учень"
+            last_name = student[3] if student[3] else ""
+            # Проверка индекса 6, чтобы бот не упал, если данных меньше
+            language = student[6] if len(student) > 6 and student[6] else "Не вказано"
+
+            text += f"👨‍🎓 {first_name} {last_name}\n"
+            text += f"🗣 {language}\n\n"
+
+        await update.message.reply_text(text)
+    return
+
+
+async def menu_teacher_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user = db.get_user(user_id)
+
+    if user and user[4] == 'teacher':
+        students_count = len(db.get_teacher_students(user_id))
+        groups_count = len(db.get_teacher_groups(user_id))
+        lessons_count = len(db.get_teacher_lessons(user_id))
+        await update.message.reply_text(
+            f"📊 Ваша статистика:\n\n"
+            f"👥 Учнів: {students_count}\n"
+            f"👥 Груп: {groups_count}\n"
+            f"📚 Заплановано уроків: {lessons_count}"
+        )

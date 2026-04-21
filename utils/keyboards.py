@@ -1,3 +1,7 @@
+import calendar
+from datetime import datetime
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+from config.settings import LANGUAGES
 def get_main_keyboard(role):
     if role == 'student':
         keyboard = [
@@ -54,4 +58,44 @@ def get_broadcast_target_keyboard():
 
         [InlineKeyboardButton("❌ Скасувати розсилку", callback_data="cancel_broadcast")]
     ]
+    return InlineKeyboardMarkup(keyboard)
+
+
+def get_calendar_keyboard(year, month):
+    """Генерує інлайн-клавіатуру з календарем на обраний місяць та рік."""
+    keyboard = []
+
+    # 1. Перший ряд - Місяць і Рік
+    month_names = ["Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень",
+                   "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень"]
+    keyboard.append([InlineKeyboardButton(f"{month_names[month - 1]} {year}", callback_data="ignore")])
+
+    # 2. Другий ряд - дні тижня
+    week_days = ["Пн", "Вв", "Ср", "Чт", "Пт", "Сб", "Нд"]
+    row = [InlineKeyboardButton(day, callback_data="ignore") for day in week_days]
+    keyboard.append(row)
+
+    # 3. Дні місяця
+    month_calendar = calendar.monthcalendar(year, month)
+    for week in month_calendar:
+        row = []
+        for day in week:
+            if day == 0:
+                row.append(InlineKeyboardButton(" ", callback_data="ignore"))
+            else:
+                row.append(InlineKeyboardButton(str(day), callback_data=f"cal_date_{year}_{month}_{day}"))
+        keyboard.append(row)
+
+    # 4. Навігація (Попередній / Сьогодні / Наступний)
+    prev_month = month - 1 if month > 1 else 12
+    prev_year = year if month > 1 else year - 1
+    next_month = month + 1 if month < 12 else 1
+    next_year = year if month < 12 else year + 1
+
+    keyboard.append([
+        InlineKeyboardButton("⬅️", callback_data=f"cal_prev_{prev_year}_{prev_month}"),
+        InlineKeyboardButton("Сьогодні", callback_data="cal_today"),
+        InlineKeyboardButton("➡️", callback_data=f"cal_next_{next_year}_{next_month}")
+    ])
+
     return InlineKeyboardMarkup(keyboard)

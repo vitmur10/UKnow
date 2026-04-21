@@ -1,3 +1,15 @@
+import sqlite3
+from datetime import datetime, time
+
+import pytz
+from telegram import Update
+from telegram.ext import ContextTypes
+
+from config.settings import SUPER_ADMIN_ID
+from database.db_manager import db
+from utils.helpers import format_lesson_time
+
+
 async def send_daily_reminders(context: ContextTypes.DEFAULT_TYPE):
     """Отправляет ежедневные напоминания об уроках в 8:00 по киевскому времени"""
     kiev_tz = pytz.timezone('Europe/Kiev')

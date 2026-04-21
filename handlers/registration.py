@@ -1,3 +1,16 @@
+from datetime import datetime
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup
+from telegram.ext import ContextTypes, ConversationHandler
+
+from database.db_manager import db
+from utils.keyboards import get_main_keyboard, get_language_keyboard
+from config.settings import (
+    LANGUAGES, GOOGLE_SCRIPT_URL,
+    REGISTER_NAME, REGISTER_LANG, REGISTER_BIRTHDATE, REGISTER_PHONE
+)
+from handlers.common import send_manager_contact_button
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1. Повністю очищуємо тимчасову пам'ять
     context.user_data.clear()
@@ -141,4 +154,9 @@ async def register_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Отправляем кнопку менеджера новому пользователю
     await send_manager_contact_button(update, context)
 
+    return ConversationHandler.END
+
+
+async def cancel_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Реєстрацію скасовано.")
     return ConversationHandler.END

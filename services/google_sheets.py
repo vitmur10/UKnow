@@ -1,3 +1,10 @@
+import requests
+from telegram import Update
+from telegram.ext import ContextTypes
+from config.settings import GOOGLE_SCRIPT_URL, SUPER_ADMIN_ID
+from database.db_manager import db
+
+
 def send_to_google(sheet_name, row_data, is_bulk=False):
     """Надсилає дані в Google. Якщо is_bulk=True, то row_data — це список списків."""
     try:

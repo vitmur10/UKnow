@@ -1,6 +1,6 @@
-# --------------------------
-# ПЕРЕВІРКА ПОСИЛАННЯ НА УРОК
-# --------------------------
+from datetime import datetime
+
+
 def is_lesson_link(text):
     """Перевіряє, чи є текст запрошенням на відеоурок (Zoom/Meet/Teams)."""
     if not text:

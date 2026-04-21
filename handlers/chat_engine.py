@@ -1,3 +1,16 @@
+import asyncio
+import html
+from datetime import datetime
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup
+from telegram.constants import ParseMode
+from telegram.ext import ContextTypes, ConversationHandler
+
+from database.db_manager import db
+from handlers.common import show_chat_page
+from utils.keyboards import get_main_keyboard, get_chat_active_keyboard
+from utils.helpers import is_lesson_link
+from config.settings import TEACHER_CHAT_ACTIVE, STUDENT_CHAT_ACTIVE, STUDENT_MESSAGE_SELECT, TEACHER_MESSAGE_SELECT
+
 _media_group_buffer: dict = {}
 async def _flush_media_group(media_group_id: str, bot, recipients: list,
                               sender_label: str, save_callback,
@@ -1020,3 +1033,450 @@ async def teacher_send_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("✅ Повідомлення відправлено учневі.")
 
     return TEACHER_CHAT_ACTIVE
+
+
+async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user = db.get_user(user_id)
+    if not user:
+        return
+
+    chat_type = context.user_data.get('chat_type')
+
+    # Визначаємо тип медіа просто для збереження в БД
+    media_type = "media"
+    if update.message.photo:
+        media_type = "photo"
+    elif update.message.document:
+        media_type = "document"
+    elif update.message.audio:
+        media_type = "audio"
+    elif update.message.video:
+        media_type = "video"
+    elif update.message.voice:
+        media_type = "voice"
+
+    caption = update.message.caption or ""
+    sender_name = f"{user[2]} {user[3]}"
+
+    # -------------------------
+    # ІНДИВІДУАЛЬНИЙ ЧАТ (Викладач -> Учень)
+    # -------------------------
+    if chat_type == "individual" and "chat_with" in context.user_data:
+        target_user_id = context.user_data["chat_with"]
+        db.save_message(user_id, target_user_id, f"[{media_type}] {caption}", media_type)
+
+        # Текст повідомлення, який піде ПІСЛЯ файлу
+        notification_text = f"📎 Медіа від викладача {sender_name}"
+        if caption:
+            notification_text += f"\n\n{caption}"
+
+        try:
+            # 1. Надсилаємо сам файл БЕЗ підпису (копіюємо оригінал)
+            await context.bot.copy_message(
+                chat_id=target_user_id,
+                from_chat_id=update.effective_chat.id,
+                message_id=update.message.message_id
+            )
+            # 2. Надсилаємо текст окремим повідомленням
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text=notification_text
+            )
+            await update.message.reply_text("✅ Медіа відправлено")
+
+        except Exception as e:
+            print(f"❌ ERROR individual media: {e}")
+            await update.message.reply_text(f"❌ Помилка відправки: {e}")
+
+    # -------------------------
+    # ГРУПОВИЙ ЧАТ (Викладач -> Група)
+    # -------------------------
+    elif chat_type == "group" and "chat_with_group" in context.user_data:
+        group_id = context.user_data["chat_with_group"]
+        members = db.get_group_members(group_id)
+        group = next((g for g in db.get_all_groups() if g[0] == group_id), None)
+
+        db.save_message(user_id, group_id=group_id, message_text=f"[{media_type}] {caption}", message_type=media_type)
+
+        group_name = group[1] if group else ""
+        notification_text = f"📎 Медіа в групу {group_name} від {sender_name}"
+        if caption:
+            notification_text += f"\n\n{caption}"
+
+        recipients = [m[0] for m in members if m[0] != user_id]
+        # Додаємо викладача групи, якщо це не той, хто надсилає зараз
+        if group and group[2] not in recipients and group[2] != user_id:
+            recipients.append(group[2])
+
+        sent_count = 0
+        for rec_id in recipients:
+            try:
+                # 1. Копіюємо файл
+                await context.bot.copy_message(
+                    chat_id=rec_id,
+                    from_chat_id=update.effective_chat.id,
+                    message_id=update.message.message_id
+                )
+                # 2. Надсилаємо текст
+                await context.bot.send_message(
+                    chat_id=rec_id,
+                    text=notification_text
+                )
+                sent_count += 1
+            except Exception as e:
+                print(f"DEBUG: Failed sending to {rec_id}: {e}")
+
+        await update.message.reply_text(f"✅ Медіа відправлено {sent_count} учасникам")
+
+    return
+
+
+# --- ІНЛАЙН КНОПКИ ЧАТІВ ---
+async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    user_id = query.from_user.id
+    # Чат з викладачем
+    if data.startswith("chat_teacher_") or data.startswith("chat_group_"):
+        teacher_id = int(data.split("_")[2])
+        context.user_data['chat_with'] = teacher_id
+        context.user_data['chat_type'] = 'individual'
+        teacher = db.get_user(teacher_id)
+        await query.edit_message_text(
+            f"💬 Чат з викладачем {teacher[2]} {teacher[3]}\n\n"
+            "Напишіть ваше повідомлення:"
+        )
+        return
+    elif data in ["cancel_chat", "cancel_teacher_chat", "cancel_student_chat"]:
+        await query.edit_message_text("Скасовано.")
+        return
+    # --- ВИБІР КОГО ДИВИТИСЬ (Учень/Вчитель/Група) ---
+    elif data.startswith("chat_by_"):
+        parts = data.split("_")
+        chat_type = parts[2]
+        # Перевіряємо сторінку
+        page = int(parts[3]) if len(parts) > 3 else 0
+
+        context.user_data['chat_filter_type'] = chat_type
+        items_per_page = 10
+
+        if chat_type == "student":
+            users = db.get_users_by_role('student')
+            # Сортування (нечутливе до регістру)
+            users.sort(key=lambda x: (x[2] or "").lower())
+            label, prefix, title = "👨‍🎓", "view_chat_student", "Оберіть учня:"
+
+        elif chat_type == "teacher":
+            users = db.get_users_by_role('teacher')
+            users.sort(key=lambda x: (x[2] or "").lower())
+            label, prefix, title = "👨‍🏫", "view_chat_teacher", "Оберіть викладача:"
+
+        elif chat_type == "group":
+            users = db.get_all_groups()
+            label, prefix, title = "👥", "view_chat_group", "Оберіть групу:"
+
+        else:
+            await query.edit_message_text("Введіть дату в форматі ДД.ММ.РРРР:")
+            context.user_data['waiting_for_date'] = True
+            return
+
+        if not users:
+            await query.edit_message_text(f"Немає даних для {chat_type}.")
+            return
+
+        # --- ЛОГІКА ПАГІНАЦІЇ ---
+        total_pages = (len(users) + items_per_page - 1) // items_per_page
+        start = page * items_per_page
+        end = start + items_per_page
+        current_list = users[start:end]
+
+        keyboard = []
+        for item in current_list:
+            if chat_type == "group":
+                name = item[1]
+            else:
+                name = f"{item[2] or ''} {item[3] or ''}".strip() or "Без імені"
+
+            keyboard.append([InlineKeyboardButton(
+                f"{label} {name}",
+                callback_data=f"{prefix}_{item[0]}"
+            )])
+
+        # Кнопки навігації
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"chat_by_{chat_type}_{page - 1}"))
+
+        nav_buttons.append(InlineKeyboardButton(f"📄 {page + 1}/{total_pages}", callback_data="ignore"))
+
+        if end < len(users):
+            nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"chat_by_{chat_type}_{page + 1}"))
+
+        if nav_buttons:
+            keyboard.append(nav_buttons)
+        # ДОДАЄМО КНОПКУ ПОШУКУ ТУТ
+        keyboard.append([InlineKeyboardButton("🔍 Пошук за ім'ям", callback_data=f"search_chat_user_{chat_type}")])
+        keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data="back_chat_menu")])
+
+        await query.edit_message_text(
+            f"💬 {title}\nСторінка {page + 1} з {total_pages}",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+    elif data.startswith("search_chat_user_"):
+        chat_type = data.split("_")[3]
+        context.user_data['waiting_for_search_name'] = True
+        context.user_data['search_chat_type'] = chat_type
+
+        await query.edit_message_text(
+            "🔎 **Введіть ім'я або прізвище учня (або частину):**\n\n"
+            "Бот знайде всіх, у кого в імені або прізвищі є це слово.",
+            parse_mode="Markdown"
+        )
+        return
+    elif data.startswith("view_chat_"):
+        parts = data.split("_")
+        user_role = db.get_user(user_id)[4]
+
+        messages = []
+        title = ""
+        entity_type = parts[2]  # student, teacher або group
+
+        # 1. ЛОГІКА ДЛЯ УЧНЯ
+        if user_role == 'student':
+            if data.startswith("view_chat_student_teacher_"):
+                teacher_id = int(parts[4])
+                teacher = db.get_user(teacher_id)
+                messages = db.get_chat_history(user1_id=user_id, user2_id=teacher_id)
+                title = f"👨‍🏫 Чат з викладачем: {teacher[2]} {teacher[3]}"
+            elif data.startswith("view_chat_student_group_"):
+                group_id = int(parts[4])
+                group_data = db.get_group_by_id(group_id)
+                messages = db.get_chat_history(group_id=group_id)
+                title = f"👥 Чат групи: {group_data[1]}"
+    # --- ОБРОБНИК СТОРІНОК ПЕРЕПИСКИ ---
+    elif data.startswith("chat_page_"):
+        page_number = int(data.split("_")[2])
+        context.user_data['current_page'] = page_number
+        await show_chat_page(query, context, page_number)
+        return
+
+
+async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    user_id = query.from_user.id
+    user = db.get_user(user_id)
+    user_role = user[4] if user else 'student'
+
+    # --- СТАРТ ЧАТІВ ---
+    if data.startswith("chat_teacher_"):
+        teacher_id = int(data.split("_")[2])
+        context.user_data['chat_with'] = teacher_id
+        context.user_data['chat_type'] = 'individual'
+        teacher = db.get_user(teacher_id)
+        await query.edit_message_text(f"💬 Чат з викладачем {teacher[2]} {teacher[3]}\n\nНапишіть ваше повідомлення:")
+        return
+
+    elif data.startswith("chat_group_"):
+        group_id = int(data.split("_")[2])
+        context.user_data['chat_with_group'] = group_id
+        context.user_data['chat_type'] = 'group'
+        groups = db.get_all_groups()
+        group = next((g for g in groups if g[0] == group_id), None)
+        await query.edit_message_text(
+            f"👥 Чат з групою {group[1] if group else 'Невідомо'}\n\nНапишіть ваше повідомлення:")
+        return
+
+    elif data in ["cancel_chat", "cancel_teacher_chat"]:
+        await query.edit_message_text("Скасовано.")
+        return
+
+    # --- ПЕРЕГЛЯД ІСТОРІЇ (ПАГІНАЦІЯ) ---
+    elif data.startswith("chat_by_"):
+        parts = data.split("_")
+        chat_type = parts[2]
+        page = int(parts[3]) if len(parts) > 3 else 0
+
+        context.user_data['chat_filter_type'] = chat_type
+        items_per_page = 10
+
+        if chat_type == "student":
+            users = db.get_users_by_role('student')
+            users.sort(key=lambda x: (x[2] or "").lower())
+            label, prefix, title = "👨‍🎓", "view_chat_student", "Оберіть учня:"
+        elif chat_type == "teacher":
+            users = db.get_users_by_role('teacher')
+            users.sort(key=lambda x: (x[2] or "").lower())
+            label, prefix, title = "👨‍🏫", "view_chat_teacher", "Оберіть викладача:"
+        elif chat_type == "group":
+            users = db.get_all_groups()
+            label, prefix, title = "👥", "view_chat_group", "Оберіть групу:"
+        else:
+            await query.edit_message_text("Введіть дату в форматі ДД.ММ.РРРР:")
+            context.user_data['waiting_for_date'] = True
+            return
+
+        if not users:
+            await query.edit_message_text(f"Немає даних для {chat_type}.")
+            return
+
+        total_pages = (len(users) + items_per_page - 1) // items_per_page
+        start = page * items_per_page
+        end = start + items_per_page
+        current_list = users[start:end]
+
+        keyboard = []
+        for item in current_list:
+            name = item[1] if chat_type == "group" else f"{item[2] or ''} {item[3] or ''}".strip() or "Без імені"
+            keyboard.append([InlineKeyboardButton(f"{label} {name}", callback_data=f"{prefix}_{item[0]}")])
+
+        nav_buttons = []
+        if page > 0: nav_buttons.append(
+            InlineKeyboardButton("⬅️ Назад", callback_data=f"chat_by_{chat_type}_{page - 1}"))
+        nav_buttons.append(InlineKeyboardButton(f"📄 {page + 1}/{total_pages}", callback_data="ignore"))
+        if end < len(users): nav_buttons.append(
+            InlineKeyboardButton("Вперед ➡️", callback_data=f"chat_by_{chat_type}_{page + 1}"))
+
+        if nav_buttons: keyboard.append(nav_buttons)
+        keyboard.append([InlineKeyboardButton("🔍 Пошук за ім'ям", callback_data=f"search_chat_user_{chat_type}")])
+        keyboard.append(
+            [InlineKeyboardButton("❌ Скасувати", callback_data="back_chat_menu")])  # Перевір, куди веде back_chat_menu
+
+        await query.edit_message_text(f"💬 {title}\nСторінка {page + 1} з {total_pages}",
+                                      reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    elif data.startswith("search_chat_user_"):
+        chat_type = data.split("_")[3]
+        context.user_data['waiting_for_search_name'] = True
+        context.user_data['search_chat_type'] = chat_type
+        await query.edit_message_text("🔎 **Введіть ім'я або прізвище (або частину):**", parse_mode="Markdown")
+        return
+
+    # --- ПЕРЕГЛЯД КОНКРЕТНОГО ЧАТУ (ІСТОРІЯ) ---
+    elif data.startswith("view_chat_"):
+        parts = data.split("_")
+        messages = []
+        title = ""
+        entity_type = parts[2]
+
+        if user_role == 'student':
+            if data.startswith("view_chat_student_teacher_"):
+                teacher_id = int(parts[4])
+                teacher = db.get_user(teacher_id)
+                messages = db.get_chat_history(user1_id=user_id, user2_id=teacher_id)
+                title = f"👨‍🏫 Чат з викладачем: {teacher[2]} {teacher[3]}"
+            elif data.startswith("view_chat_student_group_"):
+                group_id = int(parts[4])
+                group_data = db.get_group_by_id(group_id)
+                messages = db.get_chat_history(group_id=group_id)
+                title = f"👥 Чат групи: {group_data[1]}"
+
+        elif user_role == 'teacher':
+            if data.startswith("view_chat_teacher_student_"):
+                student_id = int(parts[4])
+                student = db.get_user(student_id)
+                messages = db.get_chat_history(user1_id=user_id, user2_id=student_id)
+                title = f"👨‍🎓 Чат з учнем: {student[2]} {student[3]}"
+            elif data.startswith("view_chat_teacher_group_"):
+                group_id = int(parts[4])
+                group_data = db.get_group_by_id(group_id)
+                messages = db.get_chat_history(group_id=group_id)
+                title = f"👥 Чат групи: {group_data[1]}"
+
+        elif user_role == 'admin':
+            entity_id = int(parts[3])
+            context.user_data['current_chat_entity_id'] = entity_id
+            context.user_data['current_chat_entity_type'] = entity_type
+
+            if entity_type == "group":
+                group_data = db.get_group_by_id(entity_id)
+                messages = db.get_chat_history(group_id=entity_id)
+                title = f"👥 Адмін: Чат групи {group_data[1]}"
+            elif entity_type == "student":
+                user_entity = db.get_user(entity_id)
+                teacher = db.get_student_teacher(entity_id)
+                if teacher:
+                    messages = db.get_chat_history(user1_id=entity_id, user2_id=teacher[0])
+                    title = f"👨‍🎓 Чат {user_entity[2]} з викл. {teacher[2]}"
+                else:
+                    title = f"👨‍🎓 {user_entity[2]} (немає викладача)"
+            elif entity_type == "teacher":
+                user_entity = db.get_user(entity_id)
+                students = db.get_teacher_students(entity_id)
+                for s in students:
+                    messages.extend(db.get_chat_history(user1_id=entity_id, user2_id=s[0]))
+                messages.sort(key=lambda x: x[6], reverse=True)
+                title = f"👨‍🏫 Всі чати викладача {user_entity[2]}"
+
+        if not messages:
+            back_call = f"chat_by_{entity_type}_0" if user_role == 'admin' else "back_chat_menu"  # Перевір back_chat_menu
+            keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data=back_call)]]
+            await query.edit_message_text(f"{title}\n\n❌ Повідомлень ще немає.",
+                                          reply_markup=InlineKeyboardMarkup(keyboard))
+            return
+
+        context.user_data['current_chat_messages'] = messages
+        context.user_data['current_chat_title'] = title
+        context.user_data['current_page'] = 0
+
+        # УВАГА: Переконайся, що функція show_chat_page імпортована або знаходиться тут же!
+        from main import show_chat_page
+        await show_chat_page(query, context, 0)
+        return
+
+    elif data.startswith("chat_page_"):
+        page_number = int(data.split("_")[2])
+        context.user_data['current_page'] = page_number
+        from main import show_chat_page
+        await show_chat_page(query, context, page_number)
+        return
+
+    # --- ПІДТРИМКА CONVERSATION HANDLERS ДЛЯ ЧАТІВ ---
+    # У тебе в ConversationHandler є точки входу через ці кнопки.
+    # Вони мають повертати стан.
+
+    elif data.startswith("teacher_chat_student_"):
+        student_id = int(data.split("_")[3])
+        context.user_data['teacher_chat_with'] = student_id
+        context.user_data['teacher_chat_type'] = 'individual'
+        student = db.get_user(student_id)
+        await query.edit_message_text(f"✅ Чат з учнем {student[2]} {student[3]} розпочато.", reply_markup=None)
+        # await context.bot.send_message(query.from_user.id, "Напишіть ваше повідомлення:", reply_markup=get_chat_active_keyboard())
+        from main import TEACHER_CHAT_ACTIVE
+        return TEACHER_CHAT_ACTIVE
+
+    elif data.startswith("teacher_chat_group_"):
+        group_id = int(data.split("_")[3])
+        context.user_data['teacher_chat_with_group'] = group_id
+        context.user_data['teacher_chat_type'] = 'group'
+        groups = db.get_all_groups()
+        group = next((g for g in groups if g[0] == group_id), None)
+        await query.edit_message_text(f"✅ Чат з групою {group[1] if group else 'Невідомо'} розпочато.",
+                                      reply_markup=None)
+        from main import TEACHER_CHAT_ACTIVE
+        return TEACHER_CHAT_ACTIVE
+
+    elif data.startswith("student_chat_teacher_"):
+        teacher_id = int(data.split("_")[3])
+        context.user_data['student_chat_with'] = teacher_id
+        context.user_data['student_chat_type'] = 'individual'
+        teacher = db.get_user(teacher_id)
+        await query.edit_message_text(f"✅ Чат з викладачем {teacher[2]} {teacher[3]} розпочато.", reply_markup=None)
+        from main import STUDENT_CHAT_ACTIVE
+        return STUDENT_CHAT_ACTIVE
+
+    elif data.startswith("student_chat_group_"):
+        group_id = int(data.split("_")[3])
+        context.user_data['student_chat_with_group'] = group_id
+        context.user_data['student_chat_type'] = 'group'
+        groups = db.get_all_groups()
+        group = next((g for g in groups if g[0] == group_id), None)
+        await query.edit_message_text(f"✅ Чат з групою {group[1] if group else 'Невідомо'} розпочато.",
+                                      reply_markup=None)
+        from main import STUDENT_CHAT_ACTIVE
+        return STUDENT_CHAT_ACTIVE
