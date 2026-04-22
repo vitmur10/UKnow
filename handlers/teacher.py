@@ -114,7 +114,6 @@ async def teacher_inbox(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = []
     for student_id, first_name, last_name, count, last_time, last_msg in unread_list:
-        # Обрізаємо попередній перегляд до 30 символів
         preview = (last_msg or "")[:30].replace("\n", " ")
         if len(last_msg or "") > 30:
             preview += "…"
@@ -290,14 +289,14 @@ async def teacher_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             text = f"📅 Розклад на сьогодні ({today.strftime('%d.%m.%Y')})\n\n"
             for lesson in lessons:
-                lesson_time = format_lesson_time(lesson[5])  # ИСПРАВЛЕНО: lesson_time это индекс 5
+                lesson_time = format_lesson_time(lesson[5])
                 if lesson[2]:  # individual lesson
                     student_name = f"{lesson[9]} {lesson[10]}" if lesson[9] and lesson[
-                        10] else "Невідомо"  # ИСПРАВЛЕНО: индексы 9,10
+                        10] else "Невідомо"
                     text += f"📚 Час: {lesson_time}\n"
                     text += f"    👨‍🎓 Учень: {student_name} (індивідуально)\n\n"
                 else:  # group lesson
-                    group_name = lesson[11] if lesson[11] else "Невідомо"  # ИСПРАВЛЕНО: group_name это индекс 11
+                    group_name = lesson[11] if lesson[11] else "Невідомо"
                     text += f"📚 Час: {lesson_time}\n"
                     text += f"    👥 Група: {group_name}\n\n"
 
