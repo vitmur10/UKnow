@@ -1877,191 +1877,35 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("Створення групи скасовано.")
             return ConversationHandler.END
 
-
-    # ==========================================
+# ==========================================
     # 4. КОРИСТУВАЧІ ТА ПРИЗНАЧЕННЯ
     # ==========================================
     elif data in ["list_by_teachers", "list_all_users", "back_to_admin_users", "list_users", "list_by_students",
-                  "assign_teacher", "add_teacher"] or data.startswith("change_student_teacher") or data.startswith(
-            "change_teacher_for_student_") or data.startswith("assign_new_teacher_") or data.startswith(
-            "remove_teacher_from_student_") or data.startswith("select_teacher_") or data.startswith(
-            "assign_to_student_"):
+                  "assign_teacher", "add_teacher"] or any(data.startswith(prefix) for prefix in 
+                  ["change_student_teacher", "change_teacher_for_student_", "assign_new_teacher_", 
+                   "remove_teacher_from_student_", "select_teacher_", "assign_to_student_"]):
 
-        # NOTE: send_full_user_list та show_user_filters_menu мають бути імпортовані
-
+        # 1. Прості команди
         if data == "list_by_teachers":
             # await send_full_user_list(update, context, role='teacher')
             return
         elif data == "list_all_users":
             # await send_full_user_list(update, context)
             return
-        elif data == "back_to_admin_users":
-            # await show_user_filters_menu(update.callback_query, context)
-            return
-        elif data == "list_users":
+        elif data == "back_to_admin_users" or data == "list_users":
             # await show_user_filters_menu(query, context)
             return
         elif data == "list_by_students":
             # await send_full_user_list(update, context, role='student')
             return
 
-        elif data.startswith("change_student_teacher"):
-            page = int(data.split("_")[3]) if len(data.split("_")) > 3 else 0
-            items_per_page = 10
-
-            students = db.get_users_by_role('student')
-            if not students:
-                await query.edit_message_text("Немає студентів.")
-                return
-
-            total_pages = (len(students) + items_per_page - 1) // items_per_page
-            start_idx = page * items_per_page
-            current_students = students[start_idx: start_idx + items_per_page]
-
-            keyboard = []
-            for student in current_students:
-                teacher = db.get_student_teacher(student[0])
-                teacher_info = f" (викл: {teacher[2]} {teacher[3]})" if teacher else " (без викладача)"
-                keyboard.append([InlineKeyboardButton(f"👨‍🎓 {student[2]} {student[3]}{teacher_info}",
-                                                      callback_data=f"change_teacher_for_student_{student[0]}")])
-
-            nav_buttons = []
-            if page > 0: nav_buttons.append(
-                InlineKeyboardButton("⬅️ Назад", callback_data=f"change_student_teacher_{page - 1}"))
-            nav_buttons.append(InlineKeyboardButton(f"{page + 1} / {total_pages}", callback_data="ignore"))
-            if (start_idx + items_per_page) < len(students): nav_buttons.append(
-                InlineKeyboardButton("Вперед ➡️", callback_data=f"change_student_teacher_{page + 1}"))
-
-            if nav_buttons: keyboard.append(nav_buttons)
-            keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data="back_to_menu")])
-
-            await query.edit_message_text(f"🔄 Зміна викладача учня\n\nОберіть учня (сторінка {page + 1}):",
-                                          reply_markup=InlineKeyboardMarkup(keyboard))
-            return
-
-        elif data.startswith("change_teacher_for_student_"):
-            parts = data.split("_")
-            student_id = int(parts[4])
-            page = int(parts[5]) if len(parts) > 5 else 0
-            items_per_page = 10
-
-            student = db.get_user(student_id)
-            current_teacher = db.get_student_teacher(student_id)
-
-            teachers = db.get_users_by_role('teacher')
-            if not teachers:
-                await query.edit_message_text("Немає викладачів для призначення.")
-                return
-
-            available_teachers = [t for t in teachers if not current_teacher or t[0] != current_teacher[0]]
-            total_pages = (len(available_teachers) + items_per_page - 1) // items_per_page
-            start_idx = page * items_per_page
-            current_list = available_teachers[start_idx: start_idx + items_per_page]
-
-            keyboard = []
-            if current_teacher and page == 0:
-                keyboard.append([InlineKeyboardButton("❌ Прибрати викладача (залишити без викладача)",
-                                                      callback_data=f"remove_teacher_from_student_{student_id}")])
-
-            for teacher in current_list:
-                keyboard.append([InlineKeyboardButton(f"👨‍🏫 {teacher[2]} {teacher[3]}",
-                                                      callback_data=f"assign_new_teacher_{student_id}_{teacher[0]}")])
-
-            nav_buttons = []
-            if page > 0: nav_buttons.append(
-                InlineKeyboardButton("⬅️ Назад", callback_data=f"change_teacher_for_student_{student_id}_{page - 1}"))
-            nav_buttons.append(InlineKeyboardButton(f"{page + 1} / {total_pages}", callback_data="ignore"))
-            if (start_idx + items_per_page) < len(available_teachers): nav_buttons.append(
-                InlineKeyboardButton("Вперед ➡️", callback_data=f"change_teacher_for_student_{student_id}_{page + 1}"))
-
-            if nav_buttons: keyboard.append(nav_buttons)
-            keyboard.append([InlineKeyboardButton("⬅️ До вибору учня", callback_data="change_student_teacher")])
-
-            current_teacher_text = f"Поточний викладач: {current_teacher[2]} {current_teacher[3]}" if current_teacher else "Поточний викладач: відсутній"
-            await query.edit_message_text(
-                f"🔄 Зміна викладача для {student[2]} {student[3]}\n\n{current_teacher_text}\n\nОберіть нового викладача (сторінка {page + 1}):",
-                reply_markup=InlineKeyboardMarkup(keyboard))
-            return
-
-        elif data.startswith("assign_new_teacher_"):
-            parts = data.split("_")
-            student_id = int(parts[3])
-            new_teacher_id = int(parts[4])
-
-            student = db.get_user(student_id)
-            old_teacher = db.get_student_teacher(student_id)
-            new_teacher = db.get_user(new_teacher_id)
-
-            try:
-                db.assign_teacher_to_student(new_teacher_id, student_id)
-                success_text = f"✅ Викладач успішно змінений!\n\n👨‍🎓 Студент: {student[2]} {student[3]}\n"
-                if old_teacher:
-                    success_text += f"👨‍🏫 Старий викладач: {old_teacher[2]} {old_teacher[3]}\n"
-                else:
-                    success_text += f"👨‍🏫 Старий викладач: відсутній\n"
-                success_text += f"👨‍🏫 Новий викладач: {new_teacher[2]} {new_teacher[3]}"
-
-                await query.edit_message_text(success_text)
-
-                if old_teacher:
-                    try:
-                        await context.bot.send_message(old_teacher[0],
-                                                       f"📢 Зміна призначення\n\nСтудент {student[2]} {student[3]} більше не є вашим учнем.\nНовий викладач: {new_teacher[2]} {new_teacher[3]}")
-                    except:
-                        pass
-
-                try:
-                    await context.bot.send_message(new_teacher_id,
-                                                   f"👨‍🎓 Новий учень!\n\nВам призначено студента: {student[2]} {student[3]}\n{'Попередній викладач: ' + old_teacher[2] + ' ' + old_teacher[3] if old_teacher else 'Раніше студент був без викладача'}")
-                except:
-                    pass
-
-                try:
-                    await context.bot.send_message(student_id,
-                                                   f"👨‍🏫 Зміна викладача\n\n{'Ваш попередній викладач: ' + old_teacher[2] + ' ' + old_teacher[3] if old_teacher else 'Раніше ви були без викладача'}\nВаш новий викладач: {new_teacher[2]} {new_teacher[3]}\n\nНезабаром з вами зв'яжеться новий викладач!")
-                except:
-                    pass
-
-            except Exception as e:
-                await query.edit_message_text(f"❌ Помилка зміни викладача: {str(e)}")
-            return
-
-        elif data.startswith("remove_teacher_from_student_"):
-            student_id = int(data.split("_")[4])
-            student = db.get_user(student_id)
-            old_teacher = db.get_student_teacher(student_id)
-
-            if not old_teacher:
-                await query.edit_message_text("❌ У студента вже немає призначеного викладача.")
-                return
-            try:
-                conn = sqlite3.connect(db.db_name, timeout=30, check_same_thread=False)
-                cursor = conn.cursor()
-                cursor.execute("UPDATE assignments SET is_active = 0 WHERE student_id = ?", (student_id,))
-                conn.commit()
-                conn.close()
-
-                await query.edit_message_text(
-                    f"✅ Викладач прибраний!\n\n👨‍🎓 Студент: {student[2]} {student[3]}\n👨‍🏫 Прибраний викладач: {old_teacher[2]} {old_teacher[3]}\n\nСтудент тепер без призначеного викладача.")
-                try:
-                    await context.bot.send_message(old_teacher[0],
-                                                   f"📢 Зміна призначення\n\nСтудент {student[2]} {student[3]} більше не є вашим учнем.\nПризначення скасовано адміністратором.")
-                except:
-                    pass
-                try:
-                    await context.bot.send_message(student_id,
-                                                   f"👨‍🏫 Зміна викладача\n\nВаше призначення з викладачем {old_teacher[2]} {old_teacher[3]} скасовано.\nНезабаром вам призначать нового викладача.")
-                except:
-                    pass
-            except Exception as e:
-                await query.edit_message_text(f"❌ Помилка видалення викладача: {str(e)}")
-            return
-
+        # 2. Додавання викладача (ID)
         elif data == "add_teacher":
             await query.edit_message_text("Введіть ID користувача, якого хочете зробити викладачем:")
             context.user_data['waiting_for_teacher_id'] = True
             return
 
+        # 3. Призначення викладача (Початок - вибір викладача)
         elif data == "assign_teacher":
             teachers = db.get_users_by_role('teacher')
             if not teachers:
@@ -2076,71 +1920,101 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                           reply_markup=InlineKeyboardMarkup(keyboard))
             return
 
-        elif data.startswith("select_teacher_") and not data.startswith("select_teacher_students_page_"):
-            teacher_id = int(data.split("_")[2])
-            context.user_data['selected_teacher_id'] = teacher_id
-            # Переходимо на сторінку 0 через уніфікований обробник (імітуємо колбек)
-            data = f"select_teacher_students_page_{teacher_id}_0"
-
-        if data.startswith("select_teacher_students_page_"):
-            parts = data.split("_")
-            teacher_id = int(parts[4])
-            page = int(parts[5]) if len(parts) > 5 else 0
-            context.user_data['selected_teacher_id'] = teacher_id
-            teacher = db.get_user(teacher_id)
-
-            students = db.get_users_by_role('student')
-            if not students:
-                await query.edit_message_text("Немає учнів для призначення.")
+        # 4. Обробка вибору викладача
+        if data.startswith("select_teacher_") and not data.startswith("select_teacher_students_page_"):
+            try:
+                parts = data.split("_")
+                # Для 'select_teacher_ID' частини будуть: [0]select, [1]teacher, [2]ID
+                teacher_id = int(parts[2]) 
+                context.user_data['selected_teacher_id'] = teacher_id
+                
+                # Перекидаємо на наступний блок, змінюючи data
+                data = f"select_teacher_students_page_{teacher_id}_0"
+            except Exception as e:
+                await query.edit_message_text(f"❌ Помилка в select_teacher: {e}")
                 return
 
-            items_per_page = 10
-            total_pages = (len(students) + items_per_page - 1) // items_per_page
-            start_idx = page * items_per_page
-            current_students = students[start_idx: start_idx + items_per_page]
+        # 5. Відображення списку учнів (це має бути окремий IF, не ELIF)
+        if data.startswith("select_teacher_students_page_"):
+            try:
+                parts = data.split("_")
+                # Для 'select_teacher_students_page_ID_PAGE' частини: 
+                # [0]select, [1]teacher, [2]students, [3]page, [4]ID, [5]PAGE
+                teacher_id = int(parts[4])
+                page = int(parts[5]) if len(parts) > 5 else 0
+                
+                context.user_data['selected_teacher_id'] = teacher_id
+                teacher = db.get_user(teacher_id)
+                
+                if not teacher:
+                    await query.edit_message_text(f"❌ Викладача з ID {teacher_id} не знайдено.")
+                    return
 
-            keyboard = []
-            for student in current_students:
-                keyboard.append([InlineKeyboardButton(f"👨‍🎓 {student[2]} {student[3]}",
-                                                      callback_data=f"assign_to_student_{student[0]}")])
+                students = db.get_users_by_role('student')
+                if not students:
+                    await query.edit_message_text("Немає учнів для призначення.")
+                    return
 
-            nav_buttons = []
-            if page > 0: nav_buttons.append(
-                InlineKeyboardButton("⬅️ Назад", callback_data=f"select_teacher_students_page_{teacher_id}_{page - 1}"))
-            nav_buttons.append(InlineKeyboardButton(f"{page + 1} / {total_pages}", callback_data="ignore"))
-            if (start_idx + items_per_page) < len(students): nav_buttons.append(InlineKeyboardButton("Вперед ➡️",
-                                                                                                     callback_data=f"select_teacher_students_page_{teacher_id}_{page + 1}"))
-            if nav_buttons: keyboard.append(nav_buttons)
+                items_per_page = 10
+                total_pages = (len(students) + items_per_page - 1) // items_per_page
+                start_idx = page * items_per_page
+                current_students = students[start_idx: start_idx + items_per_page]
 
-            keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data="back_to_menu")])
-            await query.edit_message_text(
-                f"👨‍🏫 Викладач: {teacher[2]} {teacher[3]}\n\nОберіть учня (сторінка {page + 1} з {total_pages}):",
-                reply_markup=InlineKeyboardMarkup(keyboard))
-            return
+                keyboard = []
+                for student in current_students:
+                    keyboard.append([InlineKeyboardButton(
+                        f"👨‍🎓 {student[2]} {student[3]}",
+                        callback_data=f"assign_to_student_{student[0]}"
+                    )])
 
+                nav_buttons = []
+                if page > 0:
+                    nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"select_teacher_students_page_{teacher_id}_{page - 1}"))
+                
+                nav_buttons.append(InlineKeyboardButton(f"{page + 1} / {total_pages}", callback_data="ignore"))
+                
+                if (start_idx + items_per_page) < len(students):
+                    nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"select_teacher_students_page_{teacher_id}_{page + 1}"))
+                
+                if nav_buttons:
+                    keyboard.append(nav_buttons)
+
+                keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data="back_to_menu")])
+
+                await query.edit_message_text(
+                    f"👨‍🏫 Викладач: {teacher[2]} {teacher[3]}\n\nОберіть учня (сторінка {page + 1} з {total_pages}):",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+                return  # Завершуємо тут, щоб не йти в інші elif
+                
+            except Exception as e:
+                await query.edit_message_text(f"❌ Помилка в списку учнів: {e}\nData: {data}")
+                return
+
+        # 6. Фінальне призначення
         elif data.startswith("assign_to_student_"):
             student_id = int(data.split("_")[3])
             teacher_id = context.user_data.get('selected_teacher_id')
 
             if not teacher_id:
-                await query.edit_message_text("Помилка: викладач не обраний.")
+                await query.edit_message_text("Помилка: викладач не обраний. Почніть спочатку.")
                 return
+            
             try:
                 db.assign_teacher_to_student(teacher_id, student_id)
                 teacher = db.get_user(teacher_id)
                 student = db.get_user(student_id)
+                
                 await query.edit_message_text(
                     f"✅ Призначення завершено!\n\n👨‍🏫 Викладач: {teacher[2]} {teacher[3]}\n👨‍🎓 Учень: {student[2]} {student[3]}")
-                try:
-                    await context.bot.send_message(teacher_id,
-                                                   f"👨‍🎓 Вам призначено нового учня:\n{student[2]} {student[3]}")
-                except:
-                    pass
-                try:
-                    await context.bot.send_message(student_id,
-                                                   f"👨‍🏫 Вам призначено викладача:\n{teacher[2]} {teacher[3]}")
-                except:
-                    pass
+                
+                # Сповіщення (в окремих try/except, щоб бот не впав, якщо юзер заблокував його)
+                for target_id, text in [
+                    (teacher_id, f"👨‍🎓 Вам призначено нового учня:\n{student[2]} {student[3]}"),
+                    (student_id, f"👨‍🏫 Вам призначено викладача:\n{teacher[2]} {teacher[3]}")
+                ]:
+                    try: await context.bot.send_message(target_id, text)
+                    except: pass
             except Exception as e:
                 await query.edit_message_text(f"❌ Помилка призначення: {str(e)}")
             return
