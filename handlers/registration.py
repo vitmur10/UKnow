@@ -65,17 +65,39 @@ async def register_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def register_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    if query:
-        await query.answer()
+
+    # Якщо користувач просто написав текст замість натискання кнопки
+    if not query:
+        await update.message.reply_text(
+            "Будь ласка, оберіть мову зі списку вище, натиснувши на кнопку 👆"
+        )
+        return REGISTER_LANG
+
+    await query.answer()
+
+    try:
+        # Отримуємо індекс мови з callback_data (наприклад, "lang_2")
         lang_index = int(query.data.split("_")[1])
-        language = LANGUAGES[lang_index].split(" ", 1)[1]  # Remove emoji
-        context.user_data['language'] = language
+        full_lang_text = LANGUAGES[lang_index]
+
+        # Очищаємо назву мови від емодзі для бази даних
+        # Якщо формат "🇬🇧 English", беремо все після пробілу
+        language_name = full_lang_text.split(" ", 1)[1] if " " in full_lang_text else full_lang_text
+        
+        context.user_data['language'] = language_name
 
         await query.edit_message_text(
-            f"Обрана мова: {LANGUAGES[lang_index]}\n\n"
+            f"Обрана мова: {full_lang_text} ✅\n\n"
             "Тепер введіть вашу дату народження у форматі ДД.ММ.РРРР:"
         )
         return REGISTER_BIRTHDATE
+
+    except (IndexError, ValueError) as e:
+        # На випадок, якщо щось пішло не так із даними кнопки
+        await query.edit_message_text(
+            "Сталася помилка при виборі мови. Спробуйте ще раз натиснути на кнопку:"
+        )
+        return REGISTER_LANG
 
 
 async def register_birthdate(update: Update, context: ContextTypes.DEFAULT_TYPE):
