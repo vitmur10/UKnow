@@ -1,6 +1,7 @@
 import asyncio
 import html
 from datetime import datetime
+from multiprocessing import context
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
@@ -1225,6 +1226,7 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
+    
     elif data.startswith("search_chat_user_"):
         chat_type = data.split("_")[3]
         context.user_data['waiting_for_search_name'] = True
@@ -1425,14 +1427,14 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data['current_page'] = 0
 
         # УВАГА: Переконайся, що функція show_chat_page імпортована або знаходиться тут же!
-        from main import show_chat_page
+        from handlers.common import show_chat_page
         await show_chat_page(query, context, 0)
         return
 
     elif data.startswith("chat_page_"):
         page_number = int(data.split("_")[2])
         context.user_data['current_page'] = page_number
-        from main import show_chat_page
+        from handlers.common import show_chat_page
         await show_chat_page(query, context, page_number)
         return
 
@@ -1447,7 +1449,6 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
         student = db.get_user(student_id)
         await query.edit_message_text(f"✅ Чат з учнем {student[2]} {student[3]} розпочато.", reply_markup=None)
         # await context.bot.send_message(query.from_user.id, "Напишіть ваше повідомлення:", reply_markup=get_chat_active_keyboard())
-        from main import TEACHER_CHAT_ACTIVE
         return TEACHER_CHAT_ACTIVE
 
     elif data.startswith("teacher_chat_group_"):
@@ -1458,7 +1459,6 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
         group = next((g for g in groups if g[0] == group_id), None)
         await query.edit_message_text(f"✅ Чат з групою {group[1] if group else 'Невідомо'} розпочато.",
                                       reply_markup=None)
-        from main import TEACHER_CHAT_ACTIVE
         return TEACHER_CHAT_ACTIVE
 
     elif data.startswith("student_chat_teacher_"):
@@ -1467,7 +1467,6 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data['student_chat_type'] = 'individual'
         teacher = db.get_user(teacher_id)
         await query.edit_message_text(f"✅ Чат з викладачем {teacher[2]} {teacher[3]} розпочато.", reply_markup=None)
-        from main import STUDENT_CHAT_ACTIVE
         return STUDENT_CHAT_ACTIVE
 
     elif data.startswith("student_chat_group_"):
@@ -1478,5 +1477,4 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
         group = next((g for g in groups if g[0] == group_id), None)
         await query.edit_message_text(f"✅ Чат з групою {group[1] if group else 'Невідомо'} розпочато.",
                                       reply_markup=None)
-        from main import STUDENT_CHAT_ACTIVE
         return STUDENT_CHAT_ACTIVE
