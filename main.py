@@ -133,8 +133,15 @@ def main():
         entry_points=[CommandHandler('start', start)],
         states={
             REGISTER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_name)],
-            REGISTER_LANG: [CallbackQueryHandler(common_callbacks, pattern="^lang_"),
-                            MessageHandler(filters.TEXT & ~filters.COMMAND, register_language)],
+            
+            # ВИПРАВЛЕНО ТУТ:
+            REGISTER_LANG: [
+                # Натискання кнопки має вести саме в register_language
+                CallbackQueryHandler(register_language, pattern="^lang_"), 
+                # Якщо користувач замість кнопки надіслав текст — нагадуємо натиснути кнопку
+                MessageHandler(filters.TEXT & ~filters.COMMAND, register_language) 
+            ],
+            
             REGISTER_BIRTHDATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_birthdate)],
             REGISTER_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_phone)],
         },
@@ -310,8 +317,11 @@ def main():
     application.add_handler(
         CallbackQueryHandler(chat_engine_callbacks, pattern=r'.*chat.*'))
     
-    application.add_handler(CallbackQueryHandler(admin_callbacks,
-                                                 pattern='^(admin|toggle|confirm|list|edit|change|assign|add|remove|manage|back_admin|back_groups|group_type|select_group|student_page|finish_create|cancel_create)'))
+    # Оновлюємо патерн для адміна, додавши чіткі префікси для викладачів
+    application.add_handler(CallbackQueryHandler(
+        admin_callbacks, 
+        pattern='^(admin|toggle|confirm|list|edit|change|assign|add|remove|manage|back_admin|back_groups|group_type|select_group|select_teacher|assign_to_student|student_page|finish_create|cancel_create)'
+    ))
     
     application.add_handler(CallbackQueryHandler(common_callbacks, pattern='^(ignore|back_to_menu|lang_|cal_)'))
     
