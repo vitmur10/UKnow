@@ -75,7 +75,7 @@ from jobs.scheduler import schedule_daily_reminders, test_reminders_command, for
 from services.google_sheets import test_gs, sync_students_command, sync_teachers_command
 
 # Фільтр для кнопок головного меню (щоб виходити з діалогів)
-MAIN_MENU_BUTTONS_FILTER = filters.Text(ALL_MAIN_MENU_BUTTONS_LIST)
+MAIN_MENU_BUTTONS_FILTER = filters.TEXT & filters.Regex(f"^({'|'.join(ALL_MAIN_MENU_BUTTONS_LIST)})$")
 
 
 # ==========================================
@@ -170,7 +170,7 @@ def main():
             CallbackQueryHandler(teacher_quick_reply_start, pattern=r'^inbox_reply_\d+$'),
         ],
         states={
-            TEACHER_MESSAGE_SELECT: [CallbackQueryHandler(teacher_callbacks, pattern="^teacher_chat_")],
+            TEACHER_MESSAGE_SELECT: [CallbackQueryHandler(chat_engine_callbacks, pattern="^teacher_chat_")],
             TEACHER_CHAT_ACTIVE: [
                 MessageHandler(filters.Regex(r'^\s*Завершити діалог\s*🔚\s*$'), teacher_chat_end),
                 MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(r'^Завершити діалог 🔚$'),
@@ -194,7 +194,7 @@ def main():
             CallbackQueryHandler(quick_reply_start, pattern=r'^quick_reply_(teacher|group)_\d+$'),
         ],
         states={
-            STUDENT_MESSAGE_SELECT: [CallbackQueryHandler(student_callbacks, pattern="^student_chat_")],
+            STUDENT_MESSAGE_SELECT: [CallbackQueryHandler(chat_engine_callbacks, pattern="^student_chat_")],
             STUDENT_CHAT_ACTIVE: [
                 MessageHandler(filters.Regex(r'^\s*Завершити діалог\s*🔚\s*$'), student_chat_end),
                 MessageHandler(filters.PHOTO | filters.AUDIO | filters.VIDEO | filters.Document.ALL | filters.VOICE,
@@ -262,7 +262,7 @@ def main():
     application.add_handler(MessageHandler(filters.Regex('^📋 Правила школи$'), menu_school_rules))
     application.add_handler(MessageHandler(filters.Regex('^❓ Популярні питання$'), menu_faq))
     application.add_handler(MessageHandler(filters.Regex('^🗓 Мій календар$'), menu_student_calendar))
-    application.add_handler(MessageHandler(filters.Regex('^📖 Історія переписок$'), route_student_history))
+    application.add_handler(MessageHandler(filters.Regex('^📖 Історія переписок$'), handle_history_button))
 
     application.add_handler(MessageHandler(filters.Regex('^📆 Мій розклад$'), menu_teacher_schedule))
     application.add_handler(MessageHandler(filters.Regex('^👨‍🎓 Мої учні$'), menu_teacher_students))
@@ -301,14 +301,20 @@ def main():
     # ==========================================
     application.add_handler(
         CallbackQueryHandler(student_callbacks, pattern='^(student_schedule|back_student_schedule)'))
+    
     application.add_handler(
         CallbackQueryHandler(teacher_callbacks, pattern='^(inbox|schedule|back_schedule|back_to_schedule)'))
+    
+    # Оновлений роутер для чатів: тепер він ловить все, що містить "chat" 
+    # (chat_, teacher_chat_, student_chat_, view_chat_ тощо)
     application.add_handler(
-        CallbackQueryHandler(chat_engine_callbacks, pattern='^(chat|cancel_chat|view_chat|search_chat|chat_page)'))
+        CallbackQueryHandler(chat_engine_callbacks, pattern=r'.*chat.*'))
+    
     application.add_handler(CallbackQueryHandler(admin_callbacks,
                                                  pattern='^(admin|toggle|confirm|list|edit|change|assign|add|remove|manage|back_admin|back_groups|group_type|select_group|student_page|finish_create|cancel_create)'))
+    
     application.add_handler(CallbackQueryHandler(common_callbacks, pattern='^(ignore|back_to_menu|lang_|cal_)'))
-
+    
     # ==========================================
     # 7. РЕЗЕРВНІ ОБРОБНИКИ ТЕКСТУ ТА МЕДІА
     # ==========================================
