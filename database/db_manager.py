@@ -34,21 +34,27 @@ class Database:
         )''')
 
         cursor.execute('''CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            from_user_id INTEGER,
-            to_user_id INTEGER,
-            group_id INTEGER,
-            message_text TEXT,
-            message_type TEXT DEFAULT 'text',
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            is_read BOOLEAN DEFAULT 0,
-            FOREIGN KEY (from_user_id) REFERENCES users (user_id),
-            FOREIGN KEY (to_user_id) REFERENCES users (user_id),
-            FOREIGN KEY (group_id) REFERENCES groups (id)
-        )''')
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    from_user_id INTEGER,
+                    to_user_id INTEGER,
+                    group_id INTEGER,
+                    message_text TEXT,
+                    message_type TEXT DEFAULT 'text',
+                    file_id TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    is_read BOOLEAN DEFAULT 0,
+                    FOREIGN KEY (from_user_id) REFERENCES users (user_id),
+                    FOREIGN KEY (to_user_id) REFERENCES users (user_id),
+                    FOREIGN KEY (group_id) REFERENCES groups (id)
+                )''')
         # Міграція: додаємо is_read якщо таблиця вже існує без нього
         try:
             cursor.execute("ALTER TABLE messages ADD COLUMN is_read BOOLEAN DEFAULT 0")
+        except Exception:
+            pass
+        # Міграція: додаємо file_id для збереження фото/документів
+        try:
+            cursor.execute("ALTER TABLE messages ADD COLUMN file_id TEXT")
         except Exception:
             pass
 
@@ -399,13 +405,14 @@ class Database:
         conn.close()
         return result
 
-    def save_message(self, from_user_id, to_user_id=None, group_id=None, message_text="", message_type='text'):
+    def save_message(self, from_user_id, to_user_id=None, group_id=None, message_text="", message_type='text',
+                     file_id=None):
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
         cursor.execute('''INSERT INTO messages 
-                         (from_user_id, to_user_id, group_id, message_text, message_type) 
-                         VALUES (?, ?, ?, ?, ?)''',
-                       (from_user_id, to_user_id, group_id, message_text, message_type))
+                         (from_user_id, to_user_id, group_id, message_text, message_type, file_id) 
+                         VALUES (?, ?, ?, ?, ?, ?)''',
+                       (from_user_id, to_user_id, group_id, message_text, message_type, file_id))
         conn.commit()
         conn.close()
 

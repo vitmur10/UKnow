@@ -30,3 +30,4 @@ Thumbs.db
 
 # --- Infrastructure ---
 .python-version
+*.db

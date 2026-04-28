@@ -187,83 +187,181 @@ async def handle_history_button(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("Ця функція доступна лише для викладачів та учнів.")
 
 
-async def show_chat_page(query, context, page_number):
-    messages = context.user_data.get('current_chat_messages', [])
-    title = context.user_data.get('current_chat_title', '')
-    entity_type = context.user_data.get('current_chat_entity_type', '')
+MESSAGES_PER_PAGE = 8
 
-    total_messages = len(messages)
-    MESSAGES_PER_PAGE = 10
-    total_pages = (total_messages + MESSAGES_PER_PAGE - 1) // MESSAGES_PER_PAGE
 
-    start_index = page_number * MESSAGES_PER_PAGE
-    end_index = start_index + MESSAGES_PER_PAGE
+def _build_message_card(msg, entity_type: str, current_user_id: int) -> tuple[str, str | None]:
+    """
+    Формує текстову «картку» одного повідомлення і повертає (card_text, file_id|None).
+    card_text — готовий HTML-блок.
+    file_id   — якщо повідомлення має медіафайл, повертаємо його file_id, інакше None.
+    """
+    # --- Розбираємо поля рядка з БД ---
+    # msg tuple: id, from_user_id, to_user_id, group_id, message_text,
+    #            message_type, file_id, timestamp, is_read, [first_name, last_name] (JOIN)
+    # Але get_chat_history повертає: id(0), from(1), to(2), group(3), text(4),
+    #   type(5), file_id(6), timestamp(7), is_read(8), first_name(9), last_name(10)
+    msg_text   = (msg[4] or "").strip()
+    msg_type   = msg[5] if len(msg) > 5 else "text"
+    file_id    = msg[6] if len(msg) > 6 else None
+    timestamp  = msg[7] if len(msg) > 7 else ""
+    first_name = msg[9] if len(msg) > 9 and msg[9] else ""
+    last_name  = msg[10] if len(msg) > 10 and msg[10] else ""
+    from_id    = msg[1] if len(msg) > 1 else 0
 
-    page_messages = messages[start_index:end_index]
+    # --- Ім'я відправника ---
+    sender_name = f"{first_name} {last_name}".strip() or "Невідомо"
 
-    if not page_messages:
-        text = f"{title}\n\n❌ Повідомлень немає на цій сторінці"
+    # --- Направлення (ти / співрозмовник) ---
+    is_mine = (int(from_id) == int(current_user_id))
+    direction = "➡️ Ви" if is_mine else f"⬅️ {sender_name}"
+
+    # --- Часова мітка ---
+    try:
+        dt_obj = datetime.fromisoformat(str(timestamp))
+        dt_corrected = dt_obj + timedelta(hours=2)
+        time_str = dt_corrected.strftime("%d.%m %H:%M")
+    except Exception:
+        time_str = str(timestamp)[:16] if timestamp else "—"
+
+    # --- Тип контенту ---
+    TYPE_ICONS = {
+        "photo":    "🖼",
+        "document": "📄",
+        "audio":    "🎵",
+        "video":    "🎬",
+        "voice":    "🎤",
+        "text":     "",
+        "trigger":  "⚡",
+    }
+    type_icon = TYPE_ICONS.get(msg_type, "📎")
+
+    # --- Текст картки ---
+    if msg_text:
+        safe_text = msg_text[:400] + ("…" if len(msg_text) > 400 else "")
+    elif file_id:
+        safe_text = f"<i>[{type_icon} медіафайл]</i>"
     else:
-        if entity_type == "teacher":
-            teacher_name = title.replace("👨‍🏫 Історія чатів викладача ", "")
-            text = f"<b>{teacher_name}</b>\n\n(Сторінка {page_number + 1} з {total_pages})\n\n"
-        else:
-            text = f"{title}\n\n(Сторінка {page_number + 1} з {total_pages})\n\n"
+        safe_text = "<i>[порожнє]</i>"
 
-        for msg in page_messages:
-            try:
-                if len(msg) > 4 and isinstance(msg[4], str) and msg[4].strip():
-                    message_text = msg[4]
-                elif len(msg) > 3 and isinstance(msg[3], str) and msg[3].strip():
-                    message_text = msg[3]
-                else:
-                    message_text = ""
+    card = (
+        f"┌ {direction}  <code>{time_str}</code>\n"
+        f"│ {type_icon} {safe_text}\n"
+        f"└──────────────\n"
+    )
+    return card, file_id if file_id else None
 
-                # ОБМЕЖЕННЯ: Якщо одне повідомлення занадто довге, обрізаємо його
-                if len(message_text) > 300:
-                    message_text = message_text[:297] + "..."
 
-                dt_obj = datetime.fromisoformat(msg[6])
-                dt_corrected = dt_obj + timedelta(hours=2)
-                timestamp = dt_corrected.strftime("📅 %d.%m ⏰ %H:%M")
+async def show_chat_page(query, context, page_number: int, files_only: bool = False):
+    """
+    Відображає сторінку архіву переписки у форматі карток.
+    files_only=True — показує лише повідомлення з медіафайлами.
+    """
+    bot          = query.message.bot
+    current_uid  = query.from_user.id
+    all_messages = context.user_data.get('current_chat_messages', [])
+    title        = context.user_data.get('current_chat_title', '📜 Архів переписки')
+    entity_type  = context.user_data.get('current_chat_entity_type', '')
 
-                sender_first = msg[7] if len(msg) > 7 and msg[7] else ""
-                sender_role = msg[8] if len(msg) > 8 and msg[8] else ""
-                sender_name = f"{sender_first} {sender_role}".strip() if sender_first or sender_role else "Невідомо"
+    # Зберігаємо поточний режим фільтра
+    context.user_data['chat_files_only'] = files_only
 
-                new_line = ""
-                if entity_type == "teacher":
-                    student_id = msg[2]
-                    student_user = db.get_user(student_id)
-                    student_name = f"{student_user[2]} {student_user[3]}" if student_user else "Невідомо"
-                    new_line = f"<b>Кому: {student_name}</b> {timestamp} {sender_name}: {message_text}\n"
-                else:
-                    new_line = f"{timestamp} {sender_name}: {message_text}\n"
+    # Фільтруємо, якщо треба
+    if files_only:
+        display_messages = [m for m in all_messages if (len(m) > 6 and m[6])]
+    else:
+        display_messages = all_messages
 
-                # ПЕРЕВІРКА: чи влізе новий рядок у ліміт 4096 символів
-                if len(text) + len(new_line) > 4000:
-                    text += "\n⚠️ <i>Частина повідомлень не влізла на сторінку...</i>"
-                    break
+    total = len(display_messages)
+    total_pages = max(1, (total + MESSAGES_PER_PAGE - 1) // MESSAGES_PER_PAGE)
+    page_number = max(0, min(page_number, total_pages - 1))
 
-                text += new_line
+    start = page_number * MESSAGES_PER_PAGE
+    page_msgs = display_messages[start: start + MESSAGES_PER_PAGE]
 
-            except Exception as e:
-                print(f"Error processing message: {msg}, error: {e}")
-                continue
+    # --- Формуємо текст сторінки ---
+    filter_label = "  |  📂 <b>Тільки файли</b>" if files_only else ""
+    header = (
+        f"<b>{title}</b>{filter_label}\n"
+        f"<i>Сторінка {page_number + 1} / {total_pages}  •  всього: {total}</i>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+    )
 
-    # Кнопки пагінації
-    keyboard_row = []
+    if not page_msgs:
+        body = "❌ <i>Повідомлень не знайдено</i>" if files_only else "❌ <i>Повідомлень ще немає</i>"
+    else:
+        cards = []
+        for msg in page_msgs:
+            card, _ = _build_message_card(msg, entity_type, current_uid)
+            cards.append(card)
+        body = "\n".join(cards)
+
+    text = header + body
+
+    # --- Збираємо file_id медіафайлів цієї сторінки ---
+    media_file_ids = []
+    for msg in page_msgs:
+        _, fid = _build_message_card(msg, entity_type, current_uid)
+        if fid:
+            msg_type = msg[5] if len(msg) > 5 else "text"
+            media_file_ids.append((fid, msg_type))
+
+    # --- Клавіатура ---
+    nav_row = []
     if page_number > 0:
-        keyboard_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"chat_page_{page_number - 1}"))
+        cb_prev = f"chat_page_{page_number - 1}_{'1' if files_only else '0'}"
+        nav_row.append(InlineKeyboardButton("⬅️", callback_data=cb_prev))
+    nav_row.append(InlineKeyboardButton(f"📄 {page_number + 1}/{total_pages}", callback_data="ignore"))
     if page_number < total_pages - 1:
-        keyboard_row.append(InlineKeyboardButton("➡️ Вперед", callback_data=f"chat_page_{page_number + 1}"))
+        cb_next = f"chat_page_{page_number + 1}_{'1' if files_only else '0'}"
+        nav_row.append(InlineKeyboardButton("➡️", callback_data=cb_next))
+
+    # Кнопка фільтра
+    if files_only:
+        filter_btn = InlineKeyboardButton("📋 Всі повідомлення", callback_data=f"chat_page_0_0")
+    else:
+        filter_btn = InlineKeyboardButton("📂 Тільки файли/ДЗ", callback_data=f"chat_page_0_1")
 
     keyboard = [
-        keyboard_row,
-        [InlineKeyboardButton("⬅️ Назад до меню", callback_data="back_chat_menu")]
+        nav_row,
+        [filter_btn],
+        [InlineKeyboardButton("⬅️ Назад до меню", callback_data="back_chat_menu")],
     ]
 
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+    # Оновлюємо текстове повідомлення
+    try:
+        await query.edit_message_text(
+            text,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+    except Exception:
+        # Повідомлення може бути незмінним (однаковий текст) — ігноруємо
+        pass
+
+    # --- Відправляємо медіафайли цієї сторінки окремими повідомленнями ---
+    if media_file_ids:
+        await bot.send_message(
+            chat_id=query.message.chat_id,
+            text=f"📎 <i>Медіафайли з цієї сторінки ({len(media_file_ids)} шт.):</i>",
+            parse_mode="HTML"
+        )
+        for fid, ftype in media_file_ids:
+            try:
+                if ftype == "photo":
+                    await bot.send_photo(chat_id=query.message.chat_id, photo=fid)
+                elif ftype == "document":
+                    await bot.send_document(chat_id=query.message.chat_id, document=fid)
+                elif ftype == "audio":
+                    await bot.send_audio(chat_id=query.message.chat_id, audio=fid)
+                elif ftype == "video":
+                    await bot.send_video(chat_id=query.message.chat_id, video=fid)
+                elif ftype == "voice":
+                    await bot.send_voice(chat_id=query.message.chat_id, voice=fid)
+                else:
+                    await bot.send_document(chat_id=query.message.chat_id, document=fid)
+            except Exception as e:
+                print(f"[show_chat_page] Не вдалося відправити медіа {fid}: {e}")
 
 
 async def common_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):

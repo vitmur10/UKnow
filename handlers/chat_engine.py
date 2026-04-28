@@ -13,9 +13,11 @@ from utils.helpers import is_lesson_link
 from config.settings import TEACHER_CHAT_ACTIVE, STUDENT_CHAT_ACTIVE, STUDENT_MESSAGE_SELECT, TEACHER_MESSAGE_SELECT
 
 _media_group_buffer: dict = {}
+
+
 async def _flush_media_group(media_group_id: str, bot, recipients: list,
-                              sender_label: str, save_callback,
-                              reply_button: "InlineKeyboardMarkup | None" = None):
+                             sender_label: str, save_callback,
+                             reply_button: "InlineKeyboardMarkup | None" = None):
     """Чекає 1.2с після останнього файлу, потім відправляє весь альбом одним send_media_group."""
     await asyncio.sleep(1.2)
 
@@ -517,8 +519,8 @@ async def quick_reply_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     data = query.data  # напр. "quick_reply_teacher_12345"
 
     parts = data.split("_")  # ['quick', 'reply', 'teacher', '12345']
-    reply_type = parts[2]    # 'teacher' або 'group'
-    target_id  = int(parts[3])
+    reply_type = parts[2]  # 'teacher' або 'group'
+    target_id = int(parts[3])
 
     if reply_type == "teacher":
         teacher = db.get_user(target_id)
@@ -526,11 +528,11 @@ async def quick_reply_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await query.answer("❌ Викладача не знайдено.", show_alert=True)
             return ConversationHandler.END
 
-        context.user_data['student_chat_with']  = target_id
-        context.user_data['student_chat_type']  = 'individual'
+        context.user_data['student_chat_with'] = target_id
+        context.user_data['student_chat_type'] = 'individual'
 
         teacher_name = f"{teacher[2]} {teacher[3]}"
-        await query.edit_message_reply_markup(reply_markup=None)   # прибираємо кнопку
+        await query.edit_message_reply_markup(reply_markup=None)  # прибираємо кнопку
         await context.bot.send_message(
             student_id,
             f"✏️ Відповідь для <b>{teacher_name}</b>.\nНапишіть повідомлення:",
@@ -545,7 +547,7 @@ async def quick_reply_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             return ConversationHandler.END
 
         context.user_data['student_chat_with_group'] = target_id
-        context.user_data['student_chat_type']       = 'group'
+        context.user_data['student_chat_type'] = 'group'
 
         group_name = group_info[1]
         await query.edit_message_reply_markup(reply_markup=None)
@@ -774,7 +776,6 @@ async def teacher_message_students(update: Update, context: ContextTypes.DEFAULT
     return TEACHER_MESSAGE_SELECT
 
 
-
 async def teacher_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробка медіафайлів від викладача — з підтримкою альбомів."""
     user_id = update.effective_user.id
@@ -879,8 +880,8 @@ async def teacher_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
     now_str = datetime.now().strftime("%d.%m %H:%M")
     user_caption = update.message.caption or ""
     new_caption = (
-        f"{sender_label}  <i>{now_str}</i>"
-        + (f"\n\n{html.escape(user_caption)}" if user_caption else "")
+            f"{sender_label}  <i>{now_str}</i>"
+            + (f"\n\n{html.escape(user_caption)}" if user_caption else "")
     )
 
     db.save_message(
@@ -1226,7 +1227,7 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
-    
+
     elif data.startswith("search_chat_user_"):
         chat_type = data.split("_")[3]
         context.user_data['waiting_for_search_name'] = True
@@ -1260,9 +1261,11 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
                 title = f"👥 Чат групи: {group_data[1]}"
     # --- ОБРОБНИК СТОРІНОК ПЕРЕПИСКИ ---
     elif data.startswith("chat_page_"):
-        page_number = int(data.split("_")[2])
+        parts = data.split("_")
+        page_number = int(parts[2])
+        files_only = len(parts) > 3 and parts[3] == "1"
         context.user_data['current_page'] = page_number
-        await show_chat_page(query, context, page_number)
+        await show_chat_page(query, context, page_number, files_only=files_only)
         return
 
 
@@ -1432,10 +1435,12 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     elif data.startswith("chat_page_"):
-        page_number = int(data.split("_")[2])
+        parts = data.split("_")
+        page_number = int(parts[2])
+        files_only = len(parts) > 3 and parts[3] == "1"
         context.user_data['current_page'] = page_number
         from handlers.common import show_chat_page
-        await show_chat_page(query, context, page_number)
+        await show_chat_page(query, context, page_number, files_only=files_only)
         return
 
     # --- ПІДТРИМКА CONVERSATION HANDLERS ДЛЯ ЧАТІВ ---
