@@ -197,16 +197,17 @@ def _build_message_card(msg, entity_type: str, current_user_id: int) -> tuple[st
     file_id   — якщо повідомлення має медіафайл, повертаємо його file_id, інакше None.
     """
     # --- Розбираємо поля рядка з БД ---
-    # msg tuple: id, from_user_id, to_user_id, group_id, message_text,
-    #            message_type, file_id, timestamp, is_read, [first_name, last_name] (JOIN)
-    # Але get_chat_history повертає: id(0), from(1), to(2), group(3), text(4),
-    #   type(5), file_id(6), timestamp(7), is_read(8), first_name(9), last_name(10)
+    # Реальна розкладка після JOIN з users:
+    # [0] id, [1] from_user_id, [2] to_user_id, [3] group_id,
+    # [4] message_text, [5] message_type, [6] timestamp, [7] is_read,
+    # [8] file_id, [9] telegram_message_id, [10] recipient_chat_id,
+    # [11] first_name (JOIN), [12] last_name (JOIN)
     msg_text   = (msg[4] or "").strip()
     msg_type   = msg[5] if len(msg) > 5 else "text"
-    file_id    = msg[6] if len(msg) > 6 else None
-    timestamp  = msg[7] if len(msg) > 7 else ""
-    first_name = msg[9] if len(msg) > 9 and msg[9] else ""
-    last_name  = msg[10] if len(msg) > 10 and msg[10] else ""
+    timestamp  = msg[6] if len(msg) > 6 else ""
+    file_id    = msg[8] if len(msg) > 8 and msg[8] else None
+    first_name = msg[11] if len(msg) > 11 and msg[11] else ""
+    last_name  = msg[12] if len(msg) > 12 and msg[12] else ""
     from_id    = msg[1] if len(msg) > 1 else 0
 
     # --- Ім'я відправника ---
@@ -257,7 +258,7 @@ async def show_chat_page(query, context, page_number: int, files_only: bool = Fa
     Відображає сторінку архіву переписки у форматі карток.
     files_only=True — показує лише повідомлення з медіафайлами.
     """
-    bot          = query.message.bot
+    bot          = context.bot
     current_uid  = query.from_user.id
     all_messages = context.user_data.get('current_chat_messages', [])
     title        = context.user_data.get('current_chat_title', '📜 Архів переписки')
@@ -268,7 +269,7 @@ async def show_chat_page(query, context, page_number: int, files_only: bool = Fa
 
     # Фільтруємо, якщо треба
     if files_only:
-        display_messages = [m for m in all_messages if (len(m) > 6 and m[6])]
+        display_messages = [m for m in all_messages if (len(m) > 8 and m[8])]
     else:
         display_messages = all_messages
 

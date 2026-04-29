@@ -419,13 +419,35 @@ async def student_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return STUDENT_CHAT_ACTIVE
 
     # --- Одиночний файл — відправляємо одразу ---
+    # Визначаємо file_id та тип медіа
+    msg = update.message
+    if msg.photo:
+        media_file_id = msg.photo[-1].file_id
+        media_type = 'photo'
+    elif msg.document:
+        media_file_id = msg.document.file_id
+        media_type = 'document'
+    elif msg.audio:
+        media_file_id = msg.audio.file_id
+        media_type = 'audio'
+    elif msg.video:
+        media_file_id = msg.video.file_id
+        media_type = 'video'
+    elif msg.voice:
+        media_file_id = msg.voice.file_id
+        media_type = 'voice'
+    else:
+        media_file_id = None
+        media_type = 'media'
+
     def save_single(_=None):
         db.save_message(
             student_id,
             to_user_id=target_teacher_id,
             group_id=group_id_for_db,
-            message_text=f"[МЕДІА] {update.message.caption or ''}",
-            message_type='media'
+            message_text=update.message.caption or '',
+            message_type=media_type,
+            file_id=media_file_id
         )
 
     now_str = datetime.now().strftime("%d.%m %H:%M")
@@ -884,12 +906,34 @@ async def teacher_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
             + (f"\n\n{html.escape(user_caption)}" if user_caption else "")
     )
 
+    # Визначаємо file_id та тип медіа
+    msg = update.message
+    if msg.photo:
+        t_file_id = msg.photo[-1].file_id
+        t_media_type = 'photo'
+    elif msg.document:
+        t_file_id = msg.document.file_id
+        t_media_type = 'document'
+    elif msg.audio:
+        t_file_id = msg.audio.file_id
+        t_media_type = 'audio'
+    elif msg.video:
+        t_file_id = msg.video.file_id
+        t_media_type = 'video'
+    elif msg.voice:
+        t_file_id = msg.voice.file_id
+        t_media_type = 'voice'
+    else:
+        t_file_id = None
+        t_media_type = 'media'
+
     db.save_message(
         user_id,
         to_user_id=context.user_data.get('teacher_chat_with') if chat_type == 'individual' else None,
         group_id=group_id_for_db,
-        message_text=f"[МЕДІА] {user_caption}",
-        message_type='media'
+        message_text=user_caption,
+        message_type=t_media_type,
+        file_id=t_file_id
     )
 
     sent_count = 0

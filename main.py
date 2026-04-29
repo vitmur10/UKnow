@@ -133,15 +133,15 @@ def main():
         entry_points=[CommandHandler('start', start)],
         states={
             REGISTER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_name)],
-            
+
             # ВИПРАВЛЕНО ТУТ:
             REGISTER_LANG: [
                 # Натискання кнопки має вести саме в register_language
-                CallbackQueryHandler(register_language, pattern="^lang_"), 
+                CallbackQueryHandler(register_language, pattern="^lang_"),
                 # Якщо користувач замість кнопки надіслав текст — нагадуємо натиснути кнопку
-                MessageHandler(filters.TEXT & ~filters.COMMAND, register_language) 
+                MessageHandler(filters.TEXT & ~filters.COMMAND, register_language)
             ],
-            
+
             REGISTER_BIRTHDATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_birthdate)],
             REGISTER_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_phone)],
         },
@@ -179,8 +179,8 @@ def main():
         states={
             TEACHER_MESSAGE_SELECT: [CallbackQueryHandler(chat_engine_callbacks, pattern="^teacher_chat_")],
             TEACHER_CHAT_ACTIVE: [
-                MessageHandler(filters.Regex(r'^\s*Завершити діалог\s*🔚\s*$'), teacher_chat_end),
-                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(r'^Завершити діалог 🔚$'),
+                MessageHandler(filters.Regex(r'^Завершити діалог'), teacher_chat_end),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(r'^Завершити діалог'),
                                teacher_message_text),
                 MessageHandler(filters.PHOTO | filters.AUDIO | filters.VIDEO | filters.Document.ALL | filters.VOICE,
                                teacher_send_media)
@@ -203,10 +203,10 @@ def main():
         states={
             STUDENT_MESSAGE_SELECT: [CallbackQueryHandler(chat_engine_callbacks, pattern="^student_chat_")],
             STUDENT_CHAT_ACTIVE: [
-                MessageHandler(filters.Regex(r'^\s*Завершити діалог\s*🔚\s*$'), student_chat_end),
+                MessageHandler(filters.Regex(r'^Завершити діалог'), student_chat_end),
                 MessageHandler(filters.PHOTO | filters.AUDIO | filters.VIDEO | filters.Document.ALL | filters.VOICE,
                                student_send_media),
-                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(r'^Завершити діалог 🔚$'),
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(r'^Завершити діалог'),
                                student_message_text),
             ],
         },
@@ -308,23 +308,23 @@ def main():
     # ==========================================
     application.add_handler(
         CallbackQueryHandler(student_callbacks, pattern='^(student_schedule|back_student_schedule)'))
-    
+
     application.add_handler(
         CallbackQueryHandler(teacher_callbacks, pattern='^(inbox|schedule|back_schedule|back_to_schedule)'))
-    
-    # Оновлений роутер для чатів: тепер він ловить все, що містить "chat" 
+
+    # Оновлений роутер для чатів: тепер він ловить все, що містить "chat"
     # (chat_, teacher_chat_, student_chat_, view_chat_ тощо)
     application.add_handler(
         CallbackQueryHandler(chat_engine_callbacks, pattern=r'.*chat.*'))
-    
+
     # Оновлюємо патерн для адміна, додавши чіткі префікси для викладачів
     application.add_handler(CallbackQueryHandler(
-        admin_callbacks, 
+        admin_callbacks,
         pattern='^(admin|toggle|confirm|list|edit|change|assign|add|remove|manage|back_admin|back_groups|group_type|select_group|select_teacher|assign_to_student|student_page|finish_create|cancel_create)'
     ))
-    
+
     application.add_handler(CallbackQueryHandler(common_callbacks, pattern='^(ignore|back_to_menu|lang_|cal_)'))
-    
+
     # ==========================================
     # 7. РЕЗЕРВНІ ОБРОБНИКИ ТЕКСТУ ТА МЕДІА
     # ==========================================
