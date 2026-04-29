@@ -320,11 +320,12 @@ def main():
     # Оновлюємо патерн для адміна, додавши чіткі префікси для викладачів
     application.add_handler(CallbackQueryHandler(
         admin_callbacks,
-        pattern='^(admin|toggle|confirm|list|edit|change|assign|add|remove|manage|back_admin|back_groups|group_type|select_group|select_teacher|assign_to_student|student_page|finish_create|cancel_create)'
+        pattern='^(admin|show|toggle|confirm|list|edit|change|assign|add|remove|manage|back_admin|back_groups|group_type|select_group|select_teacher|assign_to_student|student_page|finish_create|cancel_create)'
     ))
 
     application.add_handler(CallbackQueryHandler(common_callbacks, pattern='^(ignore|back_to_menu|lang_|cal_)'))
 
+        
     # ==========================================
     # 7. РЕЗЕРВНІ ОБРОБНИКИ ТЕКСТУ ТА МЕДІА
     # ==========================================
