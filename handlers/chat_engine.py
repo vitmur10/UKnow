@@ -10,9 +10,101 @@ from database.db_manager import db
 from handlers.common import show_chat_page
 from utils.keyboards import get_main_keyboard, get_chat_active_keyboard
 from utils.helpers import is_lesson_link
-from config.settings import TEACHER_CHAT_ACTIVE, STUDENT_CHAT_ACTIVE, STUDENT_MESSAGE_SELECT, TEACHER_MESSAGE_SELECT
+from config.settings import TEACHER_CHAT_ACTIVE, STUDENT_CHAT_ACTIVE, STUDENT_MESSAGE_SELECT, TEACHER_MESSAGE_SELECT, now_kyiv_str, CHAT_AUTO_END_MINUTES
+from config.settings import ALL_MAIN_MENU_BUTTONS_LIST
+from handlers.common import show_media_gallery
 
 _media_group_buffer: dict = {}
+
+
+async def _auto_end_chat(context):
+    """Автоматично завершує чат після бездіяльності."""
+    data = context.job.data
+    chat_id = data['chat_id']
+    role = data['role']
+    from utils.keyboards import get_main_keyboard
+
+    # Очищуємо дані чату (бо таймер спрацював і чат закрився)
+    keys_to_clear = [
+        'student_chat_type', 'student_chat_with', 'student_chat_with_group',
+        'teacher_chat_type', 'teacher_chat_with', 'teacher_chat_with_group'
+    ]
+    for key in keys_to_clear:
+        context.user_data.pop(key, None)
+
+    try:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"⏱ Чат автоматично завершено через {CHAT_AUTO_END_MINUTES} хв. бездіяльності.",
+            reply_markup=get_main_keyboard(role)
+        )
+    except Exception as e:
+        print(f"[auto_end_chat] помилка: {e}")
+
+
+def _reset_auto_end(context, chat_id: int, role: str):
+    """Скидає таймер бездіяльності."""
+    name = f"auto_end_{chat_id}"
+    for job in context.job_queue.get_jobs_by_name(name):
+        job.schedule_removal()
+    context.job_queue.run_once(
+        _auto_end_chat,
+        when=CHAT_AUTO_END_MINUTES * 60,
+        data={'chat_id': chat_id, 'role': role},
+        name=name,
+        chat_id=chat_id,  # ВАЖЛИВО: прив'язка до контексту чату
+        user_id=chat_id  # ВАЖЛИВО: прив'язка до context.user_data
+    )
+
+
+async def process_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Перехоплює клік по кнопці меню, закриває чат і перенаправляє на потрібну функцію."""
+    text = update.message.text
+    user_id = update.effective_user.id
+    _cancel_auto_end(context, user_id)
+
+    # Очищуємо дані чату
+    for key in ['student_chat_type', 'student_chat_with', 'student_chat_with_group',
+                'teacher_chat_type', 'teacher_chat_with', 'teacher_chat_with_group']:
+        context.user_data.pop(key, None)
+
+    # Словник-маршрутизатор: Кнопка -> (Модуль, Функція)
+    routes = {
+        '🏫 Про школу': ('handlers.student', 'menu_about_school'),
+        '📋 Правила школи': ('handlers.student', 'menu_school_rules'),
+        '❓ Популярні питання': ('handlers.student', 'menu_faq'),
+        '🗓 Мій календар': ('handlers.student', 'menu_student_calendar'),
+        '📖 Історія переписок': ('handlers.common', 'handle_history_button'),
+        '📆 Мій розклад': ('handlers.teacher', 'menu_teacher_schedule'),
+        '👨‍🎓 Мої учні': ('handlers.teacher', 'menu_teacher_students'),
+        '📚 Мої групи': ('handlers.teacher', 'show_teacher_groups'),
+        '📊 Статистика': ('handlers.teacher', 'menu_teacher_stats'),
+        '📬 Вхідні': ('handlers.teacher', 'teacher_inbox'),
+        '👥 Керування групами': ('handlers.admin', 'menu_admin_groups'),
+        '🗂️ Переписки / Чати': ('handlers.admin', 'menu_admin_chats'),
+        '🗓 Керування розкладом': ('handlers.admin', 'menu_admin_schedule'),
+        '👨‍💼 Керування користувачами': ('handlers.admin', 'menu_admin_users'),
+        '📊 Звіти': ('handlers.admin', 'menu_admin_reports'),
+        '📞 Написати менеджеру': ('handlers.common', 'route_manager_contact'),
+    }
+
+    if text in routes:
+        module_name, func_name = routes[text]
+        import importlib
+        module = importlib.import_module(module_name)
+        func = getattr(module, func_name)
+        # Виконуємо функцію, що прив'язана до кнопки
+        await func(update, context)
+    else:
+        from utils.keyboards import get_main_keyboard
+        user = db.get_user(user_id)
+        role = user[4] if user else 'student'
+        await update.message.reply_text("✅ Діалог перервано.", reply_markup=get_main_keyboard(role))
+
+def _cancel_auto_end(context, chat_id: int):
+    """Скасовує таймер при ручному завершенні."""
+    for job in context.job_queue.get_jobs_by_name(f"auto_end_{chat_id}"):
+        job.schedule_removal()
 
 
 async def _flush_media_group(media_group_id: str, bot, recipients: list,
@@ -32,7 +124,7 @@ async def _flush_media_group(media_group_id: str, bot, recipients: list,
     from telegram import InputMediaPhoto, InputMediaVideo, InputMediaDocument, InputMediaAudio
 
     media_items = []
-    now_str = datetime.now().strftime("%d.%m %H:%M")
+    now_str = now_kyiv_str()
     header = f"{sender_label}  <i>{now_str}</i>"
 
     for i, msg in enumerate(msgs):
@@ -151,6 +243,18 @@ async def student_message_text(update: Update, context: ContextTypes.DEFAULT_TYP
     print(f"Caption: {update.message.caption}")
     print(f"Has Photo: {bool(update.message.photo)}")
     print(f"--------------------------")
+
+    text_check = update.message.text or ""
+    if text_check in ALL_MAIN_MENU_BUTTONS_LIST:
+        await process_menu_button(update, context)
+        return ConversationHandler.END
+
+    # 2. Перевірка на авто-завершення
+    chat_type = context.user_data.get('student_chat_type')
+    if not chat_type:
+        from main import global_message_handler
+        await global_message_handler(update, context)
+        return ConversationHandler.END
     # ===================
     # 1. Визначаємо вміст повідомлення
     # Якщо є медіа (фото, документ, відео), текст знаходиться в .caption, інакше в .text
@@ -170,6 +274,7 @@ async def student_message_text(update: Update, context: ContextTypes.DEFAULT_TYP
     # Захист від порожнього повідомлення (якщо немає тексту і немає медіа)
     if not content_text and not is_media:
         await update.message.reply_text("❌ Повідомлення не може бути пустим.")
+        _reset_auto_end(context, update.effective_user.id, 'student')
         return STUDENT_CHAT_ACTIVE
 
     # Отримання даних учня
@@ -185,7 +290,7 @@ async def student_message_text(update: Update, context: ContextTypes.DEFAULT_TYP
         safe_content = content_text.strip() if content_text else ""
 
         # Компактне сповіщення без повторюваної інструкції
-        now_str = datetime.now().strftime("%d.%m %H:%M")
+        now_str = now_kyiv_str()
         notification_text = (
             f"📩 <b>{student_full_name}</b>  <i>{now_str}</i>\n\n"
             f"{safe_content}"
@@ -236,7 +341,7 @@ async def student_message_text(update: Update, context: ContextTypes.DEFAULT_TYP
         if group_info:
             group_name = group_info[1]
             teacher_id = group_info[2]
-            now_str = datetime.now().strftime("%d.%m %H:%M")
+            now_str = now_kyiv_str()
 
             # Компактне сповіщення для групи
             notification_text = (
@@ -286,27 +391,27 @@ async def student_message_text(update: Update, context: ContextTypes.DEFAULT_TYP
         else:
             await update.message.reply_text("❌ Не вдалося знайти інформацію про групу.")
 
+    _reset_auto_end(context, update.effective_user.id, 'student')
     return STUDENT_CHAT_ACTIVE
 
 
 async def student_chat_end(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Завершує активний діалог і повертає основне меню для учня."""
+    user_id = update.effective_user.id
+    _cancel_auto_end(context, user_id)
+
     context.user_data.pop('student_chat_type', None)
     context.user_data.pop('student_chat_with', None)
     context.user_data.pop('student_chat_with_group', None)
 
-    user_id = update.effective_user.id
     user = db.get_user(user_id)
-
     if not user:
         await update.message.reply_text("Помилка: користувача не знайдено.")
         return ConversationHandler.END
 
     role = user[4]
-
-    # Якщо це /start або /cancel — не надсилаємо зайве повідомлення, start сам покаже меню
     command = update.message.text.strip() if update.message and update.message.text else ""
-    if command in ('/start', '/cancel'):
+    if command == '/start':
         return ConversationHandler.END
 
     await update.message.reply_text(
@@ -340,6 +445,7 @@ async def student_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if not group_info:
             if not update.message.media_group_id:
                 await update.message.reply_text("❌ Групу не знайдено.")
+            _reset_auto_end(context, update.effective_user.id, 'student')
             return STUDENT_CHAT_ACTIVE
         group_id_for_db = gid
         target_teacher_id = group_info[2]
@@ -355,6 +461,7 @@ async def student_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not recipients:
         if not update.message.media_group_id:
             await update.message.reply_text("❌ Не вдалося визначити отримувача.")
+        _reset_auto_end(context, update.effective_user.id, 'student')
         return STUDENT_CHAT_ACTIVE
 
     # Заголовок повідомлення
@@ -416,6 +523,7 @@ async def student_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
                                sender_label, save_cb, reply_button=album_reply_btn)
         )
         _media_group_buffer[mgid]["task"] = task
+        _reset_auto_end(context, update.effective_user.id, 'student')
         return STUDENT_CHAT_ACTIVE
 
     # --- Одиночний файл — відправляємо одразу ---
@@ -450,7 +558,7 @@ async def student_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
             file_id=media_file_id
         )
 
-    now_str = datetime.now().strftime("%d.%m %H:%M")
+    now_str = now_kyiv_str()
     # Заголовок йде як підпис прямо на фото/файл — без окремого повідомлення
     header = f"{sender_label}  <i>{now_str}</i>"
     user_caption = update.message.caption or ""
@@ -493,6 +601,7 @@ async def student_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     save_single()
     await update.message.reply_text(f"✅ Файл відправлено {target_label}.")
+    _reset_auto_end(context, update.effective_user.id, 'student')
     return STUDENT_CHAT_ACTIVE
 
 
@@ -524,6 +633,7 @@ async def teacher_quick_reply_start(update: Update, context: ContextTypes.DEFAUL
         parse_mode='HTML',
         reply_markup=get_chat_active_keyboard()
     )
+    _reset_auto_end(context, update.effective_user.id, 'teacher')
     return TEACHER_CHAT_ACTIVE
 
 
@@ -580,6 +690,7 @@ async def quick_reply_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             reply_markup=get_chat_active_keyboard()
         )
 
+    _reset_auto_end(context, update.effective_user.id, 'student')
     return STUDENT_CHAT_ACTIVE
 
 
@@ -590,6 +701,18 @@ async def teacher_message_text(update: Update, context: ContextTypes.DEFAULT_TYP
     print(f"Caption: {update.message.caption}")
     print(f"Has Photo: {bool(update.message.photo)}")
     print(f"--------------------------")
+    # 1. Перехоплення кнопок головного меню
+    if update.message.text in ALL_MAIN_MENU_BUTTONS_LIST:
+        await process_menu_button(update, context)
+        return ConversationHandler.END
+
+    # 2. Перевірка на авто-завершення
+    chat_type = context.user_data.get('teacher_chat_type')
+    if not chat_type:
+        # Чат вже завершився по таймеру, тому кидаємо текст у загальний обробник, щоб повідомлення не зникло
+        from main import global_message_handler
+        await global_message_handler(update, context)
+        return ConversationHandler.END
     # ===================
     user_id = update.effective_user.id
     user = db.get_user(user_id)
@@ -614,7 +737,7 @@ async def teacher_message_text(update: Update, context: ContextTypes.DEFAULT_TYP
         # Зберегти повідомлення
         db.save_message(user_id, target_student_id, message_text)
 
-        now_str = datetime.now().strftime("%d.%m %H:%M")
+        now_str = now_kyiv_str()
         # Компактне сповіщення учню
         student_notification = (
             f"📩 <b>{teacher_full_name}</b>  <i>{now_str}</i>\n\n"
@@ -667,6 +790,7 @@ async def teacher_message_text(update: Update, context: ContextTypes.DEFAULT_TYP
 
         if not group:
             await update.message.reply_text("❌ Помилка: групу не знайдено.")
+            _reset_auto_end(context, update.effective_user.id, 'teacher')
             return TEACHER_CHAT_ACTIVE
 
         group_name = group[1]
@@ -677,7 +801,7 @@ async def teacher_message_text(update: Update, context: ContextTypes.DEFAULT_TYP
         # Зберегти повідомлення
         db.save_message(user_id, group_id=group_id, message_text=message_text)
 
-        now_str = datetime.now().strftime("%d.%m %H:%M")
+        now_str = now_kyiv_str()
         # Компактне сповіщення групі
         group_notification = (
             f"👥 <b>{group_name}</b> · <b>{teacher_full_name}</b>  <i>{now_str}</i>\n\n"
@@ -731,24 +855,24 @@ async def teacher_message_text(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # 🐞 DEBUG 5: Возврат состояния
     print(f"DEBUG 5: Returning state TEACHER_CHAT_ACTIVE")
+    _reset_auto_end(context, update.effective_user.id, 'teacher')
     return TEACHER_CHAT_ACTIVE
 
 
 async def teacher_chat_end(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Завершает активный диалог и возвращает основное меню."""
-    print("--- DEBUG: teacher_chat_end ВИКЛИКАНО! ---")
+    user_id = update.effective_user.id
+    _cancel_auto_end(context, user_id)
 
     context.user_data.pop('teacher_chat_type', None)
     context.user_data.pop('teacher_chat_with', None)
     context.user_data.pop('teacher_chat_with_group', None)
 
-    user_id = update.effective_user.id
     user = db.get_user(user_id)
     role = user[4]
 
-    # Якщо це /start — не надсилаємо "Діалог завершено", бо start сам покаже меню
     command = update.message.text.strip() if update.message and update.message.text else ""
-    if command in ('/start', '/cancel'):
+    if command == '/start':
         return ConversationHandler.END
 
     await update.message.reply_text(
@@ -824,6 +948,7 @@ async def teacher_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if not group_info:
             if not update.message.media_group_id:
                 await update.message.reply_text("❌ Групу не знайдено.")
+            _reset_auto_end(context, update.effective_user.id, 'teacher')
             return TEACHER_CHAT_ACTIVE
         group_id_for_db = gid
         members = db.get_group_members(gid)
@@ -835,6 +960,7 @@ async def teacher_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not recipients:
         if not update.message.media_group_id:
             await update.message.reply_text("❌ Не вдалося визначити отримувача.")
+        _reset_auto_end(context, update.effective_user.id, 'teacher')
         return TEACHER_CHAT_ACTIVE
 
     # Заголовок
@@ -896,10 +1022,11 @@ async def teacher_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
                                sender_label, save_cb, reply_button=album_reply_btn)
         )
         _media_group_buffer[mgid]["task"] = task
+        _reset_auto_end(context, update.effective_user.id, 'teacher')
         return TEACHER_CHAT_ACTIVE
 
     # --- Одиночний файл ---
-    now_str = datetime.now().strftime("%d.%m %H:%M")
+    now_str = now_kyiv_str()
     user_caption = update.message.caption or ""
     new_caption = (
             f"{sender_label}  <i>{now_str}</i>"
@@ -970,6 +1097,7 @@ async def teacher_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
             print(f"teacher_send_media single error to {r_id}: {e}")
 
     await update.message.reply_text(f"✅ Файл відправлено {target_label}.")
+    _reset_auto_end(context, update.effective_user.id, 'teacher')
     return TEACHER_CHAT_ACTIVE
 
 
@@ -982,6 +1110,7 @@ async def teacher_send_message(update: Update, context: ContextTypes.DEFAULT_TYP
     teacher = db.get_user(user_id)
     if not teacher:
         await update.message.reply_text("❌ Помилка: Вас не знайдено в базі даних.")
+        _reset_auto_end(context, update.effective_user.id, 'teacher')
         return TEACHER_CHAT_ACTIVE
 
     teacher_full_name = f"{teacher[2]} {teacher[3]}"
@@ -1000,6 +1129,7 @@ async def teacher_send_message(update: Update, context: ContextTypes.DEFAULT_TYP
         target_user_id = context.user_data.get('chat_with')
         if not target_user_id:
             await update.message.reply_text("❌ Не обрано учня для чату.")
+            _reset_auto_end(context, update.effective_user.id, 'teacher')
             return TEACHER_CHAT_ACTIVE
     elif chat_type == 'group':
         group_id = context.user_data.get('chat_with_group')
@@ -1008,6 +1138,7 @@ async def teacher_send_message(update: Update, context: ContextTypes.DEFAULT_TYP
             group_name = group_info[1]
         else:
             await update.message.reply_text("❌ Групу не знайдено.")
+            _reset_auto_end(context, update.effective_user.id, 'teacher')
             return TEACHER_CHAT_ACTIVE
 
     # 2. Формування тексту повідомлення
@@ -1078,6 +1209,7 @@ async def teacher_send_message(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         await update.message.reply_text("✅ Повідомлення відправлено учневі.")
 
+    _reset_auto_end(context, update.effective_user.id, 'teacher')
     return TEACHER_CHAT_ACTIVE
 
 
@@ -1183,18 +1315,20 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
     data = query.data
     user_id = query.from_user.id
-    
+
     # Отримуємо роль користувача
     user = db.get_user(user_id)
     user_role = user[4] if user else 'student'
-    
-    print(f"DEBUG: Callback data received: {data} | User Role: {user_role}")
 
+    print(f"DEBUG: Callback data received: {data} | User Role: {user_role}")
+    if data.startswith("show_media_gallery_"):
+        await show_media_gallery(update, context)
+        return
     # 1. --- СТАРТ НОВОГО ЧАТУ (Запис повідомлення) ---
     if data.startswith("chat_teacher_") or data.startswith("chat_group_"):
         parts = data.split("_")
         target_id = int(parts[2])
-        
+
         if data.startswith("chat_teacher_"):
             context.user_data['chat_with'] = target_id
             context.user_data['chat_type'] = 'individual'
@@ -1246,20 +1380,31 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
         if page > 0: nav.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"chat_by_{chat_type}_{page-1}"))
         nav.append(InlineKeyboardButton(f"📄 {page+1}/{total_pages}", callback_data="ignore"))
         if end < len(users): nav.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"chat_by_{chat_type}_{page+1}"))
-        
+
         if nav: keyboard.append(nav)
         keyboard.append([InlineKeyboardButton("🔍 Пошук", callback_data=f"search_chat_user_{chat_type}")])
         keyboard.append([InlineKeyboardButton("❌ Назад", callback_data="back_chat_menu")])
 
         await query.edit_message_text(f"{title}\nСторінка {page+1}", reply_markup=InlineKeyboardMarkup(keyboard))
         return
+    elif data.startswith("chat_page_"):
+        parts = data.split("_")
+        # чакаємо формат: chat_page_PAGE_FILESONLY (напр. chat_page_0_0)
+        try:
+            page_number = int(parts[2])
+            files_only = (parts[3] == "1") if len(parts) > 3 else False
 
+            from handlers.common import show_chat_page
+            await show_chat_page(query, context, page_number, files_only=files_only)
+        except (IndexError, ValueError) as e:
+            print(f"Помилка пагінації чату: {e}")
+        return
     # 3. --- ПЕРЕГЛЯД КОНКРЕТНОЇ ІСТОРІЇ (Те, що ми правили раніше) ---
     elif data.startswith("view_chat_") or data.startswith("group_chat_") or data.startswith("chat_"):
         parts = data.split("_")
         entity_id = int(parts[-1])
         messages = []
-        
+
         if "group" in data:
             messages = db.get_chat_history(group_id=entity_id)
             title = "👥 Чат групи"
@@ -1268,25 +1413,18 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
             title = "💬 Особистий чат"
 
         if not messages:
-            await query.edit_message_text(f"{title}\n\n❌ Повідомлень немає.", 
+            await query.edit_message_text(f"{title}\n\n❌ Повідомлень немає.",
                                           reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="back_chat_menu")]]))
             return
 
         context.user_data['current_chat_messages'] = messages
         context.user_data['current_chat_title'] = title
         context.user_data['current_page'] = 0
-        
+
         from handlers.common import show_chat_page
         await show_chat_page(query, context, 0)
         return
 
-    # 4. --- ПАГІНАЦІЯ СТОРІНОК ЧАТУ ---
-    elif data.startswith("chat_page_"):
-        parts = data.split("_")
-        page_number = int(parts[2])
-        from handlers.common import show_chat_page
-        await show_chat_page(query, context, page_number)
-        return
 
     elif data in ["cancel_chat", "cancel_teacher_chat"]:
         await query.edit_message_text("Скасовано.")
@@ -1382,7 +1520,7 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
         parts = data.split("_")
         messages = []
         title = ""
-        
+
         # parts може бути: ['view', 'chat', 'student', '123'] або ['view', 'chat', 'student', 'teacher', '123']
         # Тому ID завжди беремо як останній елемент, а тип — як третій.
         entity_type = parts[2]
@@ -1421,13 +1559,13 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
                 group_data = db.get_group_by_id(entity_id)
                 messages = db.get_chat_history(group_id=entity_id)
                 title = f"👥 Адмін: Чат групи {group_data[1]}"
-            
+
             elif entity_type == "student" or entity_type == "teacher":
                 user_entity = db.get_user(entity_id)
                 import sqlite3
                 conn = sqlite3.connect(db.db_name)
                 cursor = conn.cursor()
-                
+
                 # ШУКАЄМО ВСЕ: і де він отримувач, і де відправник, і групові, і особисті
                 query = '''
                     SELECT m.*, u.first_name, u.last_name 
@@ -1439,7 +1577,7 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
                 cursor.execute(query, (entity_id, entity_id))
                 messages = cursor.fetchall()
                 conn.close()
-                
+
                 icon = "👨‍🎓" if entity_type == "student" else "👨‍🏫"
                 name = f"{user_entity[2]} {user_entity[3]}" if user_entity else f"ID: {entity_id}"
                 title = f"{icon} Вся історія: {name}"
@@ -1464,14 +1602,6 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
             await query.edit_message_text("Помилка: функція відображення чату не знайдена.")
         return
 
-    elif data.startswith("chat_page_"):
-        parts = data.split("_")
-        page_number = int(parts[2])
-        files_only = len(parts) > 3 and parts[3] == "1"
-        context.user_data['current_page'] = page_number
-        from handlers.common import show_chat_page
-        await show_chat_page(query, context, page_number, files_only=files_only)
-        return
 
     # --- ПІДТРИМКА CONVERSATION HANDLERS ДЛЯ ЧАТІВ ---
     # У тебе в ConversationHandler є точки входу через ці кнопки.
@@ -1484,6 +1614,7 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
         student = db.get_user(student_id)
         await query.edit_message_text(f"✅ Чат з учнем {student[2]} {student[3]} розпочато.", reply_markup=None)
         # await context.bot.send_message(query.from_user.id, "Напишіть ваше повідомлення:", reply_markup=get_chat_active_keyboard())
+        _reset_auto_end(context, update.effective_user.id, 'teacher')
         return TEACHER_CHAT_ACTIVE
 
     elif data.startswith("teacher_chat_group_"):
@@ -1494,6 +1625,7 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
         group = next((g for g in groups if g[0] == group_id), None)
         await query.edit_message_text(f"✅ Чат з групою {group[1] if group else 'Невідомо'} розпочато.",
                                       reply_markup=None)
+        _reset_auto_end(context, update.effective_user.id, 'teacher')
         return TEACHER_CHAT_ACTIVE
 
     elif data.startswith("student_chat_teacher_"):
@@ -1502,6 +1634,7 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data['student_chat_type'] = 'individual'
         teacher = db.get_user(teacher_id)
         await query.edit_message_text(f"✅ Чат з викладачем {teacher[2]} {teacher[3]} розпочато.", reply_markup=None)
+        _reset_auto_end(context, update.effective_user.id, 'student')
         return STUDENT_CHAT_ACTIVE
 
     elif data.startswith("student_chat_group_"):
@@ -1512,4 +1645,5 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
         group = next((g for g in groups if g[0] == group_id), None)
         await query.edit_message_text(f"✅ Чат з групою {group[1] if group else 'Невідомо'} розпочато.",
                                       reply_markup=None)
+        _reset_auto_end(context, update.effective_user.id, 'student')
         return STUDENT_CHAT_ACTIVE

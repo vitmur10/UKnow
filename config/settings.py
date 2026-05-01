@@ -1,5 +1,6 @@
 import os
 import logging
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 # Завантажуємо змінні з файлу .env
@@ -17,6 +18,22 @@ DB_NAME = os.getenv("DB_NAME", "school_bot.db")
 # 2. БАЗОВІ КОНСТАНТИ
 # ==========================================
 MESSAGES_PER_PAGE = 20
+
+# ==========================================
+# Часовий пояс Київ та авто-завершення чату
+# ==========================================
+KYIV_TZ = timezone(timedelta(hours=3))
+CHAT_AUTO_END_MINUTES = 5  # хвилин бездіяльності → авто-завершення
+
+
+def now_kyiv() -> datetime:
+    """Поточний час за Києвом (UTC+3)."""
+    return datetime.now(KYIV_TZ)
+
+
+def now_kyiv_str() -> str:
+    """Поточний час за Києвом у форматі ДД.ММ ГГ:ХХ."""
+    return now_kyiv().strftime("%d.%m %H:%M")
 IMAGE_WARNING_FILE_ID = "AgACAgIAAxkBAANnaT19FCc1xzRo7jpVDg-Z1xLD9LkAAqYLaxuyKPFJTpOEh7vOf9QBAAMCAAN5AAM2BA"
 BACKUP_DIR = 'backups'
 

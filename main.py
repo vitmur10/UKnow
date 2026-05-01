@@ -36,7 +36,7 @@ from handlers.registration import (
 # Спільні / Глобальні
 from handlers.common import (
     common_callbacks, route_manager_contact, fallback_message, handle_unknown_text,
-    myid_command, manager_command, handle_history_button
+    myid_command, manager_command, handle_history_button,show_media_gallery
 )
 
 # Учень
@@ -306,6 +306,10 @@ def main():
     # ==========================================
     # 6. ІНЛАЙН РОУТЕРИ (Замість старого button_callback)
     # ==========================================
+
+    application.add_handler(CallbackQueryHandler(show_media_gallery, pattern=r'^show_media_gallery_\d+$'))
+    application.add_handler(CallbackQueryHandler(chat_engine_callbacks, pattern=r'^chat_page_'))
+    application.add_handler(CallbackQueryHandler(chat_engine_callbacks, pattern=r'.*chat.*'))
     application.add_handler(
         CallbackQueryHandler(student_callbacks, pattern='^(student_schedule|back_student_schedule)'))
 
@@ -323,7 +327,6 @@ def main():
         pattern='^(admin|show|toggle|confirm|list|edit|change|assign|add|remove|manage|back_admin|back_groups|group_type|select_group|select_teacher|assign_to_student|student_page|finish_create|cancel_create)'
     ))
 
-    application.add_handler(CallbackQueryHandler(common_callbacks, pattern='^(ignore|back_to_menu|lang_|cal_)'))
 
         
     # ==========================================
