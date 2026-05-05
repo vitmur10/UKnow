@@ -1306,7 +1306,6 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 print(f"DEBUG: Failed sending to {rec_id}: {e}")
 
         await update.message.reply_text(f"✅ Медіа відправлено {sent_count} учасникам")
-
     return
 
 
