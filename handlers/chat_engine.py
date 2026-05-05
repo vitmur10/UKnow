@@ -545,16 +545,26 @@ async def student_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
     elif msg.voice:
         media_file_id = msg.voice.file_id
         media_type = 'voice'
+    elif msg.sticker:
+        # Стікер — зберігаємо emoji та назву пака як текст, file_id для відображення
+        sticker = msg.sticker
+        emoji = sticker.emoji or "🎭"
+        pack = sticker.set_name or ""
+        sticker_label = f"[Стікер {emoji}{f' ({pack})' if pack else ''}]"
+        media_file_id = sticker.file_id
+        media_type = 'sticker'
     else:
         media_file_id = None
         media_type = 'media'
 
     def save_single(_=None):
+        # Для стікерів зберігаємо текстовий опис замість порожнього caption
+        text_to_save = sticker_label if media_type == 'sticker' else (update.message.caption or '')
         db.save_message(
             student_id,
             to_user_id=target_teacher_id,
             group_id=group_id_for_db,
-            message_text=update.message.caption or '',
+            message_text=text_to_save,
             message_type=media_type,
             file_id=media_file_id
         )
@@ -588,14 +598,26 @@ async def student_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
     sent_count = 0
     for r_id in recipients:
         try:
-            await context.bot.copy_message(
-                chat_id=r_id,
-                from_chat_id=update.effective_chat.id,
-                message_id=update.message.message_id,
-                caption=new_caption,
-                parse_mode='HTML',
-                reply_markup=r_markup
-            )
+            if media_type == 'sticker':
+                # Стікер надсилаємо через send_sticker — caption до нього не підтримується
+                # Тому спочатку текстове повідомлення з заголовком, потім стікер
+                header_text = f"{sender_label}  <i>{now_kyiv_str()}</i>\n{html.escape(sticker_label)}"
+                await context.bot.send_message(
+                    chat_id=r_id,
+                    text=header_text,
+                    parse_mode='HTML',
+                    reply_markup=r_markup
+                )
+                await context.bot.send_sticker(chat_id=r_id, sticker=media_file_id)
+            else:
+                await context.bot.copy_message(
+                    chat_id=r_id,
+                    from_chat_id=update.effective_chat.id,
+                    message_id=update.message.message_id,
+                    caption=new_caption,
+                    parse_mode='HTML',
+                    reply_markup=r_markup
+                )
             sent_count += 1
         except Exception as e:
             print(f"student_send_media single error to {r_id}: {e}")
@@ -1051,15 +1073,24 @@ async def teacher_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
     elif msg.voice:
         t_file_id = msg.voice.file_id
         t_media_type = 'voice'
+    elif msg.sticker:
+        sticker = msg.sticker
+        t_emoji = sticker.emoji or "🎭"
+        t_pack = sticker.set_name or ""
+        t_sticker_label = f"[Стікер {t_emoji}{f' ({t_pack})' if t_pack else ''}]"
+        t_file_id = sticker.file_id
+        t_media_type = 'sticker'
     else:
         t_file_id = None
         t_media_type = 'media'
 
+    # Для стікерів зберігаємо текстовий опис
+    text_to_save = t_sticker_label if t_media_type == 'sticker' else user_caption
     db.save_message(
         user_id,
         to_user_id=context.user_data.get('teacher_chat_with') if chat_type == 'individual' else None,
         group_id=group_id_for_db,
-        message_text=user_caption,
+        message_text=text_to_save,
         message_type=t_media_type,
         file_id=t_file_id
     )
@@ -1085,14 +1116,25 @@ async def teacher_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     )
                 ]])
             # caption і reply_markup одразу в copy_message — без окремого send_message
-            await context.bot.copy_message(
-                chat_id=r_id,
-                from_chat_id=update.effective_chat.id,
-                message_id=update.message.message_id,
-                caption=new_caption,
-                parse_mode='HTML',
-                reply_markup=r_markup
-            )
+            if t_media_type == 'sticker':
+                # Стікер: спочатку заголовок текстом, потім сам стікер
+                t_header = f"{html.escape(teacher_full_name)}  <i>{now_kyiv_str()}</i>\n{html.escape(t_sticker_label)}"
+                await context.bot.send_message(
+                    chat_id=r_id,
+                    text=t_header,
+                    parse_mode='HTML',
+                    reply_markup=r_markup
+                )
+                await context.bot.send_sticker(chat_id=r_id, sticker=t_file_id)
+            else:
+                await context.bot.copy_message(
+                    chat_id=r_id,
+                    from_chat_id=update.effective_chat.id,
+                    message_id=update.message.message_id,
+                    caption=new_caption,
+                    parse_mode='HTML',
+                    reply_markup=r_markup
+                )
             sent_count += 1
         except Exception as e:
             print(f"teacher_send_media single error to {r_id}: {e}")

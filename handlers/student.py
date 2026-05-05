@@ -5,7 +5,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 from database.db_manager import db
 from utils.keyboards import get_main_keyboard, get_calendar_keyboard, get_chat_active_keyboard
 from utils.helpers import format_lesson_time
-from config.settings import STUDENT_CHAT_ACTIVE, STUDENT_MESSAGE_SELECT
+from config.settings import STUDENT_CHAT_ACTIVE, STUDENT_MESSAGE_SELECT, KYIV_TZ, now_kyiv
 
 
 async def show_student_chat_history(update: Update, context: ContextTypes.DEFAULT_TYPE, student_id):
@@ -49,7 +49,7 @@ async def student_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
 
     if data == "student_schedule_today":
-        today = datetime.now().date()
+        today = now_kyiv().date()
         lessons = db.get_student_lessons(user_id, today)
 
         if not lessons:
@@ -119,7 +119,7 @@ async def student_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     # Календар студента
     elif data == "student_schedule_calendar":
-        now = datetime.now()
+        now = now_kyiv()
         calendar_keyboard = get_calendar_keyboard(now.year, now.month)
         await query.edit_message_text(
             "📅 Оберіть дату для перегляду календаря:",

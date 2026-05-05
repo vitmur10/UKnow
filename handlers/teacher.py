@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 from database.db_manager import db
 from utils.keyboards import get_main_keyboard, get_calendar_keyboard, get_chat_active_keyboard
 from utils.helpers import format_lesson_time
-from config.settings import TEACHER_CHAT_ACTIVE, TEACHER_MESSAGE_SELECT
+from config.settings import TEACHER_CHAT_ACTIVE, TEACHER_MESSAGE_SELECT, KYIV_TZ, now_kyiv
 
 
 async def teacher_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -305,7 +305,7 @@ async def teacher_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     elif data == "schedule_today":
-        today = datetime.now().date()
+        today = now_kyiv().date()
         lessons = db.get_teacher_lessons(user_id, today)
 
         if not lessons:
@@ -378,7 +378,7 @@ async def teacher_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         return
     elif data == "schedule_calendar":
-        now = datetime.now()
+        now = now_kyiv()
         calendar_keyboard = get_calendar_keyboard(now.year, now.month)
         await query.edit_message_text(
             "📅 Оберіть дату для перегляду розкладу:",
