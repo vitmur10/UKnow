@@ -252,8 +252,8 @@ async def student_message_text(update: Update, context: ContextTypes.DEFAULT_TYP
     # 2. Перевірка на авто-завершення
     chat_type = context.user_data.get('student_chat_type')
     if not chat_type:
-        from main import global_message_handler
-        await global_message_handler(update, context)
+        from handlers.common import fallback_message
+        await fallback_message(update, context)
         return ConversationHandler.END
     # ===================
     # 1. Визначаємо вміст повідомлення
@@ -287,12 +287,13 @@ async def student_message_text(update: Update, context: ContextTypes.DEFAULT_TYP
     # === ГІЛКА 1: ІНДИВІДУАЛЬНИЙ ЧАТ З ВИКЛАДАЧЕМ ===
     if chat_type == 'individual':
         target_teacher_id = context.user_data.get('student_chat_with')
-        safe_content = content_text.strip() if content_text else ""
+        safe_content = html.escape(content_text.strip()) if content_text else ""
+        safe_name = html.escape(student_full_name)
 
         # Компактне сповіщення без повторюваної інструкції
         now_str = now_kyiv_str()
         notification_text = (
-            f"📩 <b>{student_full_name}</b>  <i>{now_str}</i>\n\n"
+            f"📩 <b>{safe_name}</b>  <i>{now_str}</i>\n\n"
             f"{safe_content}"
         )
 
@@ -345,8 +346,8 @@ async def student_message_text(update: Update, context: ContextTypes.DEFAULT_TYP
 
             # Компактне сповіщення для групи
             notification_text = (
-                f"👥 <b>{group_name}</b> · <b>{student_full_name}</b>  <i>{now_str}</i>\n\n"
-                f"{content_text}"
+                f"👥 <b>{html.escape(group_name)}</b> · <b>{html.escape(student_full_name)}</b>  <i>{now_str}</i>\n\n"
+                f"{html.escape(content_text) if content_text else ''}"
             )
 
             # Зберігаємо в базу
@@ -710,8 +711,8 @@ async def teacher_message_text(update: Update, context: ContextTypes.DEFAULT_TYP
     chat_type = context.user_data.get('teacher_chat_type')
     if not chat_type:
         # Чат вже завершився по таймеру, тому кидаємо текст у загальний обробник, щоб повідомлення не зникло
-        from main import global_message_handler
-        await global_message_handler(update, context)
+        from handlers.common import fallback_message
+        await fallback_message(update, context)
         return ConversationHandler.END
     # ===================
     user_id = update.effective_user.id
@@ -740,8 +741,8 @@ async def teacher_message_text(update: Update, context: ContextTypes.DEFAULT_TYP
         now_str = now_kyiv_str()
         # Компактне сповіщення учню
         student_notification = (
-            f"📩 <b>{teacher_full_name}</b>  <i>{now_str}</i>\n\n"
-            f"{message_text}"
+            f"📩 <b>{html.escape(teacher_full_name)}</b>  <i>{now_str}</i>\n\n"
+            f"{html.escape(message_text)}"
         )
 
         # Кнопка "Відповісти" прямо під повідомленням
@@ -804,8 +805,8 @@ async def teacher_message_text(update: Update, context: ContextTypes.DEFAULT_TYP
         now_str = now_kyiv_str()
         # Компактне сповіщення групі
         group_notification = (
-            f"👥 <b>{group_name}</b> · <b>{teacher_full_name}</b>  <i>{now_str}</i>\n\n"
-            f"{message_text}"
+            f"👥 <b>{html.escape(group_name)}</b> · <b>{html.escape(teacher_full_name)}</b>  <i>{now_str}</i>\n\n"
+            f"{html.escape(message_text)}"
         )
 
         # Відправити всім учасникам групи
@@ -1320,9 +1321,7 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
     user_role = user[4] if user else 'student'
 
     print(f"DEBUG: Callback data received: {data} | User Role: {user_role}")
-    if data.startswith("show_media_gallery_"):
-        await show_media_gallery(update, context)
-        return
+
     # 1. --- СТАРТ НОВОГО ЧАТУ (Запис повідомлення) ---
     if data.startswith("chat_teacher_") or data.startswith("chat_group_"):
         parts = data.split("_")
@@ -1398,33 +1397,6 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
         except (IndexError, ValueError) as e:
             print(f"Помилка пагінації чату: {e}")
         return
-    # 3. --- ПЕРЕГЛЯД КОНКРЕТНОЇ ІСТОРІЇ (Те, що ми правили раніше) ---
-    elif data.startswith("view_chat_") or data.startswith("group_chat_") or data.startswith("chat_"):
-        parts = data.split("_")
-        entity_id = int(parts[-1])
-        messages = []
-
-        if "group" in data:
-            messages = db.get_chat_history(group_id=entity_id)
-            title = "👥 Чат групи"
-        else:
-            messages = db.get_chat_history(user1_id=user_id, user2_id=entity_id)
-            title = "💬 Особистий чат"
-
-        if not messages:
-            await query.edit_message_text(f"{title}\n\n❌ Повідомлень немає.",
-                                          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="back_chat_menu")]]))
-            return
-
-        context.user_data['current_chat_messages'] = messages
-        context.user_data['current_chat_title'] = title
-        context.user_data['current_page'] = 0
-
-        from handlers.common import show_chat_page
-        await show_chat_page(query, context, 0)
-        return
-
-
     elif data in ["cancel_chat", "cancel_teacher_chat"]:
         await query.edit_message_text("Скасовано.")
         return
@@ -1566,14 +1538,14 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
                 cursor = conn.cursor()
 
                 # ШУКАЄМО ВСЕ: і де він отримувач, і де відправник, і групові, і особисті
-                query = '''
+                sql_query = '''
                     SELECT m.*, u.first_name, u.last_name 
                     FROM messages m
                     LEFT JOIN users u ON m.from_user_id = u.user_id
                     WHERE m.from_user_id = ? OR m.to_user_id = ?
                     ORDER BY m.timestamp DESC
                 '''
-                cursor.execute(query, (entity_id, entity_id))
+                cursor.execute(sql_query, (entity_id, entity_id))
                 messages = cursor.fetchall()
                 conn.close()
 
@@ -1605,6 +1577,28 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
     # --- ПІДТРИМКА CONVERSATION HANDLERS ДЛЯ ЧАТІВ ---
     # У тебе в ConversationHandler є точки входу через ці кнопки.
     # Вони мають повертати стан.
+
+    elif data == "back_chat_menu":
+        # Повертаємо користувача до меню залежно від ролі
+        if user_role == 'admin':
+            keyboard = [
+                [InlineKeyboardButton("👨‍🎓 Учні", callback_data="chat_by_student_0")],
+                [InlineKeyboardButton("👨‍🏫 Викладачі", callback_data="chat_by_teacher_0")],
+                [InlineKeyboardButton("👥 Групи", callback_data="chat_by_group_0")],
+            ]
+            await query.edit_message_text(
+                "🗂️ Переписки. Оберіть категорію:",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            await query.edit_message_text("✅ Закрито.")
+            from utils.keyboards import get_main_keyboard
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="Оберіть дію:",
+                reply_markup=get_main_keyboard(user_role)
+            )
+        return
 
     elif data.startswith("teacher_chat_student_"):
         student_id = int(data.split("_")[3])

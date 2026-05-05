@@ -36,7 +36,7 @@ from handlers.registration import (
 # Спільні / Глобальні
 from handlers.common import (
     common_callbacks, route_manager_contact, fallback_message, handle_unknown_text,
-    myid_command, manager_command, handle_history_button,show_media_gallery
+    myid_command, manager_command, handle_history_button, show_media_gallery
 )
 
 # Учень
@@ -307,19 +307,17 @@ def main():
     # 6. ІНЛАЙН РОУТЕРИ (Замість старого button_callback)
     # ==========================================
 
+    # ВАЖЛИВО: порядок має значення — специфічні патерни ВИЩЕ загальних!
     application.add_handler(CallbackQueryHandler(show_media_gallery, pattern=r'^show_media_gallery_\d+$'))
     application.add_handler(CallbackQueryHandler(chat_engine_callbacks, pattern=r'^chat_page_'))
+    # Загальний роутер чатів — один раз (без дублікату)
     application.add_handler(CallbackQueryHandler(chat_engine_callbacks, pattern=r'.*chat.*'))
+
     application.add_handler(
         CallbackQueryHandler(student_callbacks, pattern='^(student_schedule|back_student_schedule)'))
 
     application.add_handler(
         CallbackQueryHandler(teacher_callbacks, pattern='^(inbox|schedule|back_schedule|back_to_schedule)'))
-
-    # Оновлений роутер для чатів: тепер він ловить все, що містить "chat"
-    # (chat_, teacher_chat_, student_chat_, view_chat_ тощо)
-    application.add_handler(
-        CallbackQueryHandler(chat_engine_callbacks, pattern=r'.*chat.*'))
 
     # Оновлюємо патерн для адміна, додавши чіткі префікси для викладачів
     application.add_handler(CallbackQueryHandler(
@@ -327,8 +325,6 @@ def main():
         pattern='^(admin|show|toggle|confirm|list|edit|change|assign|add|remove|manage|back_admin|back_groups|group_type|select_group|select_teacher|assign_to_student|student_page|finish_create|cancel_create)'
     ))
 
-
-        
     # ==========================================
     # 7. РЕЗЕРВНІ ОБРОБНИКИ ТЕКСТУ ТА МЕДІА
     # ==========================================

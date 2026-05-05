@@ -21,6 +21,7 @@ from config.settings import (
     MESSAGES_PER_PAGE
 )
 
+
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
@@ -245,15 +246,18 @@ async def check_database_command(update: Update, context: ContextTypes.DEFAULT_T
         cursor = conn.cursor()
 
         # Беремо всі заплановані уроки
-        cursor.execute('''SELECT l.lesson_date, l.lesson_time,
-                                 t.first_name, t.last_name,
-                                 s.first_name, s.last_name,
+        cursor.execute('''SELECT l.lesson_date,
+                                 l.lesson_time,
+                                 t.first_name,
+                                 t.last_name,
+                                 s.first_name,
+                                 s.last_name,
                                  g.name
                           FROM lessons l
-                          LEFT JOIN users t ON l.teacher_id = t.user_id
-                          LEFT JOIN users s ON l.student_id = s.user_id
-                          LEFT JOIN groups g ON l.group_id = g.id
-                          WHERE l.status = 'scheduled' 
+                                   LEFT JOIN users t ON l.teacher_id = t.user_id
+                                   LEFT JOIN users s ON l.student_id = s.user_id
+                                   LEFT JOIN groups g ON l.group_id = g.id
+                          WHERE l.status = 'scheduled'
                           ORDER BY l.lesson_date ASC, l.lesson_time ASC''')
 
         lessons = cursor.fetchall()
@@ -309,6 +313,7 @@ async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # 🎯 КЛЮЧОВА ЗМІНА: Перехід до стану очікування вибору цілі
     return BROADCAST_SELECT_TARGET
 
+
 async def broadcast_select_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обробляє вибір цільової аудиторії."""
     query = update.callback_query
@@ -325,7 +330,7 @@ async def broadcast_select_target(update: Update, context: ContextTypes.DEFAULT_
     elif data == 'bc_target_teachers_all':
         target_name = "Викладачі: ВСІ"
     else:
-        print(f"DEBUG BROADCAST: ERROR! Unknown target: {data}") # Прінт помилки
+        print(f"DEBUG BROADCAST: ERROR! Unknown target: {data}")  # Прінт помилки
         await query.edit_message_text("Помилка вибору цілі.")
         return ConversationHandler.END
 
@@ -340,8 +345,9 @@ async def broadcast_select_target(update: Update, context: ContextTypes.DEFAULT_
 
     # Прінт №2: Чи перейшов бот у стан очікування повідомлення
     print(f"DEBUG BROADCAST: State changed to BROADCAST_WAIT_MESSAGE. Waiting for input...")
-    
+
     return BROADCAST_WAIT_MESSAGE
+
 
 async def broadcast_send_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     message_text = update.message.text
@@ -487,6 +493,7 @@ async def show_user_filters_menu(update: Update, context: ContextTypes.DEFAULT_T
 async def cancel_add_lesson(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Додавання уроку скасовано.")
     return ConversationHandler.END
+
 
 async def cancel_create_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Створення групи скасовано.")
@@ -700,11 +707,12 @@ async def cancel_admin_lesson(update: Update, context: ContextTypes.DEFAULT_TYPE
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+
 async def send_full_user_list(update: Update, context: ContextTypes.DEFAULT_TYPE, role: Optional[str] = None):
     """Показує повний список користувачів з можливістю фільтрації."""
     print(f"\n--- DEBUG: Виклик send_full_user_list ---")
     print(f"Аргумент role: {role}")
-    
+
     # Визначаємо, чи це натискання на кнопку
     query = update.callback_query
     if query:
@@ -739,7 +747,7 @@ async def send_full_user_list(update: Update, context: ContextTypes.DEFAULT_TYPE
         for user_data in users:
             try:
                 # Виводимо в консоль сирі дані, щоб бачити структуру
-                # print(f"DEBUG USER DATA: {user_data}") 
+                # print(f"DEBUG USER DATA: {user_data}")
                 name = f"{user_data[2]} {user_data[3]}"
                 role_text = user_data[4]
                 text += f"{icon} {name} - {role_text}\n"
@@ -757,7 +765,8 @@ async def send_full_user_list(update: Update, context: ContextTypes.DEFAULT_TYPE
             parts = [text[i:i + 4096] for i in range(0, len(text), 4096)]
             for i, part in enumerate(parts):
                 if i == len(parts) - 1:
-                    await context.bot.send_message(chat_id=update.effective_chat.id, text=part, reply_markup=reply_markup)
+                    await context.bot.send_message(chat_id=update.effective_chat.id, text=part,
+                                                   reply_markup=reply_markup)
                 else:
                     await context.bot.send_message(chat_id=update.effective_chat.id, text=part)
         else:
@@ -771,6 +780,7 @@ async def send_full_user_list(update: Update, context: ContextTypes.DEFAULT_TYPE
         print("--- DEBUG: Повідомлення успішно відправлено ---\n")
     except Exception as e:
         print(f"!!! ПОМИЛКА ПРИ ВІДПРАВЦІ: {e}")
+
 
 async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
@@ -1232,9 +1242,9 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ==========================================
     elif data.startswith("admin_select_") or data.startswith("admin_student_") or data.startswith(
             "admin_teacher_") or data.startswith(
-            "admin_group_") or data == "admin_search_student_schedule" or data == "back_admin_schedule" or data.startswith(
-            "admin_add_lesson_") or data.startswith("lesson_student_") or data.startswith(
-            "lesson_group_") or data == "cancel_add_lesson" or data.startswith("admin_lesson_target_"):
+        "admin_group_") or data == "admin_search_student_schedule" or data == "back_admin_schedule" or data.startswith(
+        "admin_add_lesson_") or data.startswith("lesson_student_") or data.startswith(
+        "lesson_group_") or data == "cancel_add_lesson" or data.startswith("admin_lesson_target_"):
 
         if data.startswith("admin_select_student"):
             page = int(data.split("_")[3]) if len(data.split("_")) > 3 else 0
@@ -1399,7 +1409,7 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     t_id = lesson[1]
                     teacher = db.get_user(t_id)
                     t_full = f"{teacher[2] or ''} {teacher[3] or ''}".strip() if teacher else (
-                                f"{lesson[9] or ''} {lesson[10] or ''}".strip() or "Викладач")
+                            f"{lesson[9] or ''} {lesson[10] or ''}".strip() or "Викладач")
                     text += f"{status_icon} {l_date} о {l_time} — викладач: {t_full}\n"
 
             keyboard = [
@@ -1554,10 +1564,10 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data in ["list_groups", "edit_group", "back_groups", "create_group", "finish_create_group",
                   "cancel_create_group"] or data.startswith("edit_group_") or (
             data.startswith("change_teacher_") and not data.startswith(
-            "change_teacher_for_student_")) or data.startswith("set_teacher_") or data.startswith(
-            "manage_members_") or data.startswith("add_member_") or data.startswith("add_student_") or data.startswith(
-            "remove_member_") or data.startswith("group_type_") or data.startswith(
-            "select_group_teacher_") or data.startswith("toggle_student_") or data.startswith("student_page_"):
+        "change_teacher_for_student_")) or data.startswith("set_teacher_") or data.startswith(
+        "manage_members_") or data.startswith("add_member_") or data.startswith("add_student_") or data.startswith(
+        "remove_member_") or data.startswith("group_type_") or data.startswith(
+        "select_group_teacher_") or data.startswith("toggle_student_") or data.startswith("student_page_"):
 
         if data == "create_group":
             await query.edit_message_text("Введіть назву групи:")
@@ -1904,23 +1914,24 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 4. КОРИСТУВАЧІ ТА ПРИЗНАЧЕННЯ
     # ==========================================
     elif data in ["list_by_teachers", "list_all_users", "back_to_admin_users", "list_users", "list_by_students",
-                  "assign_teacher", "add_teacher", "show_user_filters_menu"] or any(data.startswith(prefix) for prefix in 
-                  ["change_student_teacher", "change_teacher_for_student_", "assign_new_teacher_", 
-                   "remove_teacher_from_student_", "select_teacher_", "assign_to_student_"]):
+                  "assign_teacher", "add_teacher", "show_user_filters_menu"] or any(
+        data.startswith(prefix) for prefix in
+        ["change_student_teacher", "change_teacher_for_student_", "assign_new_teacher_",
+         "remove_teacher_from_student_", "select_teacher_", "assign_to_student_"]):
 
         # 1. Прості команди
         if data == "list_by_teachers":
             await send_full_user_list(update, context, role='teacher')
             return
-            
+
         elif data == "list_all_users":
             await send_full_user_list(update, context)
             return
-            
+
         elif data in ["back_to_admin_users", "list_users", "show_user_filters_menu"]:
             await show_user_filters_menu(update, context)
             return
-            
+
         elif data == "list_by_students":
             await send_full_user_list(update, context, role='student')
             return
@@ -1950,7 +1961,7 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data.startswith("select_teacher_") and not data.startswith("select_teacher_students_page_"):
             try:
                 parts = data.split("_")
-                teacher_id = int(parts[2]) 
+                teacher_id = int(parts[2])
                 context.user_data['selected_teacher_id'] = teacher_id
                 # Оновлюємо data для переходу в наступний блок
                 data = f"select_teacher_students_page_{teacher_id}_0"
@@ -1965,10 +1976,10 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Частини: [4] - ID, [5] - Page
                 teacher_id = int(parts[4])
                 page = int(parts[5]) if len(parts) > 5 else 0
-                
+
                 context.user_data['selected_teacher_id'] = teacher_id
                 teacher = db.get_user(teacher_id)
-                
+
                 if not teacher:
                     await query.edit_message_text(f"❌ Викладача з ID {teacher_id} не знайдено.")
                     return
@@ -1992,13 +2003,15 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 nav_buttons = []
                 if page > 0:
-                    nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"select_teacher_students_page_{teacher_id}_{page - 1}"))
-                
+                    nav_buttons.append(InlineKeyboardButton("⬅️ Назад",
+                                                            callback_data=f"select_teacher_students_page_{teacher_id}_{page - 1}"))
+
                 nav_buttons.append(InlineKeyboardButton(f"{page + 1} / {total_pages}", callback_data="ignore"))
-                
+
                 if (start_idx + items_per_page) < len(students):
-                    nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"select_teacher_students_page_{teacher_id}_{page + 1}"))
-                
+                    nav_buttons.append(InlineKeyboardButton("Вперед ➡️",
+                                                            callback_data=f"select_teacher_students_page_{teacher_id}_{page + 1}"))
+
                 if nav_buttons:
                     keyboard.append(nav_buttons)
 
@@ -2009,7 +2022,7 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
                 return
-                
+
             except Exception as e:
                 await query.edit_message_text(f"❌ Помилка в списку учнів: {e}")
                 return
@@ -2023,36 +2036,38 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not teacher_id:
                 await query.edit_message_text("Помилка: викладач не обраний. Почніть спочатку.")
                 return
-            
+
             try:
                 db.assign_teacher_to_student(teacher_id, student_id)
                 teacher = db.get_user(teacher_id)
                 student = db.get_user(student_id)
-                
+
                 await query.edit_message_text(
                     f"✅ Призначення завершено!\n\n👨‍🏫 Викладач: {teacher[2]} {teacher[3]}\n👨‍🎓 Учень: {student[2]} {student[3]}")
-                
+
                 for target_id, text in [(teacher_id, f"👨‍🎓 Вам призначено нового учня:\n{student[2]} {student[3]}"),
                                         (student_id, f"👨‍🏫 Вам призначено викладача:\n{teacher[2]} {teacher[3]}")]:
-                    try: await context.bot.send_message(target_id, text)
-                    except: pass
+                    try:
+                        await context.bot.send_message(target_id, text)
+                    except:
+                        pass
             except Exception as e:
                 await query.edit_message_text(f"❌ Помилка призначення: {str(e)}")
             return
-        
+
         # 7. Зміна викладача учня (Вибір учня зі сторінками)
         elif data.startswith("change_student_teacher"):
             page = int(data.split("_")[3]) if len(data.split("_")) > 3 else 0
             items_per_page = 10
-            
+
             students = db.get_users_by_role('student')
             if not students:
                 await query.edit_message_text("Немає учнів.")
                 return
-            
+
             total_pages = (len(students) + items_per_page - 1) // items_per_page
             start_idx = page * items_per_page
-            current_students = students[start_idx : start_idx + items_per_page]
+            current_students = students[start_idx: start_idx + items_per_page]
 
             keyboard = []
             for student in current_students:
@@ -2067,15 +2082,18 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Навігація
             nav_buttons = []
             if page > 0:
-                nav_buttons.append(InlineKeyboardButton("⬅️ Назад", callback_data=f"change_student_teacher_page_{page - 1}"))
+                nav_buttons.append(
+                    InlineKeyboardButton("⬅️ Назад", callback_data=f"change_student_teacher_page_{page - 1}"))
             nav_buttons.append(InlineKeyboardButton(f"{page + 1} / {total_pages}", callback_data="ignore"))
             if (start_idx + items_per_page) < len(students):
-                nav_buttons.append(InlineKeyboardButton("Вперед ➡️", callback_data=f"change_student_teacher_page_{page + 1}"))
-            
+                nav_buttons.append(
+                    InlineKeyboardButton("Вперед ➡️", callback_data=f"change_student_teacher_page_{page + 1}"))
+
             if nav_buttons: keyboard.append(nav_buttons)
             keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_admin_users")])
-            
-            await query.edit_message_text(f"🔄 Оберіть учня (сторінка {page + 1}):", reply_markup=InlineKeyboardMarkup(keyboard))
+
+            await query.edit_message_text(f"🔄 Оберіть учня (сторінка {page + 1}):",
+                                          reply_markup=InlineKeyboardMarkup(keyboard))
             return
 
         # 8. Вибір нового вчителя для конкретного учня
@@ -2083,23 +2101,25 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             student_id = int(data.split("_")[4])
             student = db.get_user(student_id)
             current_teacher = db.get_student_teacher(student_id)
-            
+
             teachers = db.get_users_by_role('teacher')
             # Відфільтровуємо того, хто вже призначений
             available_teachers = [t for t in teachers if not current_teacher or t[0] != current_teacher[0]]
-            
+
             keyboard = []
             if current_teacher:
-                keyboard.append([InlineKeyboardButton("🗑 Прибрати викладача", callback_data=f"remove_teacher_from_student_{student_id}")])
-            
+                keyboard.append([InlineKeyboardButton("🗑 Прибрати викладача",
+                                                      callback_data=f"remove_teacher_from_student_{student_id}")])
+
             for t in available_teachers:
-                keyboard.append([InlineKeyboardButton(f"👨‍🏫 {t[2]} {t[3]}", callback_data=f"assign_new_teacher_{student_id}_{t[0]}")])
-            
+                keyboard.append([InlineKeyboardButton(f"👨‍🏫 {t[2]} {t[3]}",
+                                                      callback_data=f"assign_new_teacher_{student_id}_{t[0]}")])
+
             keyboard.append([InlineKeyboardButton("⬅️ До учнів", callback_data="change_student_teacher")])
-            
+
             txt = f"🔄 Зміна викладача для {student[2]} {student[3]}\n"
             txt += f"Зараз: {current_teacher[2]} {current_teacher[3]}" if current_teacher else "Зараз: без викладача"
-            
+
             await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(keyboard))
             return
 
@@ -2107,22 +2127,24 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data.startswith("assign_new_teacher_"):
             parts = data.split("_")
             student_id, new_teacher_id = int(parts[3]), int(parts[4])
-            
+
             old_teacher = db.get_student_teacher(student_id)
             db.assign_teacher_to_student(new_teacher_id, student_id)
-            
+
             student = db.get_user(student_id)
             new_teacher = db.get_user(new_teacher_id)
-            
+
             await query.edit_message_text(f"✅ Успішно змінено!\n👨‍🎓 {student[2]} ➡️ 👨‍🏫 {new_teacher[2]}")
-            
+
             # Сповіщення (копіюємо з вашої старої версії)
             for cid, msg in [
                 (new_teacher_id, f"👨‍🎓 Новий учень: {student[2]} {student[3]}"),
                 (student_id, f"👨‍🏫 Ваш новий викладач: {new_teacher[2]} {new_teacher[3]}"),
             ]:
-                try: await context.bot.send_message(cid, msg)
-                except: pass
+                try:
+                    await context.bot.send_message(cid, msg)
+                except:
+                    pass
             return
 
         # 10. Видалення призначення
@@ -2135,9 +2157,10 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn.execute("UPDATE assignments SET is_active = 0 WHERE student_id = ?", (student_id,))
             conn.commit()
             conn.close()
-            
+
             await query.edit_message_text("✅ Викладача прибрано. Учень тепер без вчителя.")
             return
+
 
 # --- СТЕЙТИ (ОЧІКУВАННЯ ТЕКСТУ ВІД АДМІНА) ---
 # Це код з кінця твого handle_message, який чекає на введення тексту (ID, ім'я, дату)
@@ -2221,10 +2244,11 @@ async def handle_admin_text_states(update: Update, context: ContextTypes.DEFAULT
             # модальное окно
             conn = sqlite3.connect(db.db_name, timeout=30, check_same_thread=False)
             cursor = conn.cursor()
-            cursor.execute('''SELECT m.*, u.first_name, u.last_name FROM messages m
+            cursor.execute('''SELECT m.*, u.first_name, u.last_name
+                              FROM messages m
                                        JOIN users u ON m.from_user_id = u.user_id
-                                       WHERE date(m.timestamp) = ?
-                                       ORDER BY m.timestamp DESC''', (date_str,))
+                              WHERE date (m.timestamp) = ?
+                              ORDER BY m.timestamp DESC''', (date_str,))
             messages = cursor.fetchall()
             conn.close()
 
@@ -2367,9 +2391,9 @@ async def menu_admin_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def menu_admin_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("👨‍🎓 По учню", callback_data="chat_by_student")],
-        [InlineKeyboardButton("👨‍🏫 По викладачу", callback_data="chat_by_teacher")],
-        [InlineKeyboardButton("👥 По групі", callback_data="chat_by_group")],
+        [InlineKeyboardButton("👨‍🎓 По учню", callback_data="chat_by_student_0")],
+        [InlineKeyboardButton("👨‍🏫 По викладачу", callback_data="chat_by_teacher_0")],
+        [InlineKeyboardButton("👥 По групі", callback_data="chat_by_group_0")],
         [InlineKeyboardButton("📅 По даті", callback_data="chat_by_date")],
         [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_menu")]
     ]

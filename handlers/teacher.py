@@ -47,11 +47,11 @@ async def list_teacher_students(update, context):
         student_id = student[0]
         first_name = student[2]
         last_name = student[3]
-        
+
         # Перевіряємо, щоб не було None, якщо прізвище не вказано
         full_name = f"{first_name} {last_name}" if last_name else first_name
-        
-        keyboard.append([InlineKeyboardButton(full_name, callback_data=f"chat_{student_id}")])
+
+        keyboard.append([InlineKeyboardButton(full_name, callback_data=f"view_chat_teacher_student_{student_id}")])
 
     keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_teacher_menu")])
 
@@ -75,7 +75,8 @@ async def show_students(update, context):
     keyboard = []
     for student in students:
         student_id, first_name, last_name = student
-        keyboard.append([InlineKeyboardButton(f"{first_name} {last_name}", callback_data=f"chat_{student_id}")])
+        keyboard.append([InlineKeyboardButton(f"{first_name} {last_name}",
+                                              callback_data=f"view_chat_teacher_student_{student_id}")])
 
     keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_teacher_menu")])
 
@@ -98,7 +99,7 @@ async def show_groups(update, context):
 
     keyboard = []
     for group_id, group_name in groups:
-        keyboard.append([InlineKeyboardButton(group_name, callback_data=f"group_chat_{group_id}")])
+        keyboard.append([InlineKeyboardButton(group_name, callback_data=f"view_chat_teacher_group_{group_id}")])
 
     keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_teacher_menu")])
 
@@ -211,6 +212,7 @@ async def show_teacher_groups(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await update.message.reply_text(text)
 
+
 async def show_teacher_chat_history(update: Update, context: ContextTypes.DEFAULT_TYPE, teacher_id):
     """
     Показує викладачеві список чатів (учні та групи) для перегляду історії.
@@ -218,7 +220,7 @@ async def show_teacher_chat_history(update: Update, context: ContextTypes.DEFAUL
     # Отримуємо дані
     assigned_students = db.get_teacher_students(teacher_id)
     assigned_groups = db.get_teacher_groups(teacher_id)
-    
+
     # Логування для перевірки в терміналі
     print(f"DEBUG: Students found: {len(assigned_students) if assigned_students else 0}")
     print(f"DEBUG: Groups found: {len(assigned_groups) if assigned_groups else 0}")
@@ -231,11 +233,11 @@ async def show_teacher_chat_history(update: Update, context: ContextTypes.DEFAUL
             s_id = student[0]
             first_name = student[2] if student[2] else "Учень"
             last_name = student[3] if student[3] else ""
-            
+
             # РЕКОМЕНДАЦІЯ: Перевірте, чи chat_engine очікує саме такий callback_data!
             keyboard.append([InlineKeyboardButton(
                 f"👨‍🎓 {first_name} {last_name}",
-                callback_data=f"chat_{s_id}" # Спростив для відповідності іншим функціям
+                callback_data=f"view_chat_teacher_student_{s_id}"
             )])
 
     # Додаємо кнопки для груп
@@ -245,7 +247,7 @@ async def show_teacher_chat_history(update: Update, context: ContextTypes.DEFAUL
             g_name = group[1]
             keyboard.append([InlineKeyboardButton(
                 f"👥 Група: {g_name}",
-                callback_data=f"group_chat_{g_id}"
+                callback_data=f"view_chat_teacher_group_{g_id}"
             )])
 
     if not assigned_students and not assigned_groups:
@@ -260,12 +262,13 @@ async def show_teacher_chat_history(update: Update, context: ContextTypes.DEFAUL
 
     reply_markup = InlineKeyboardMarkup(keyboard)
     text = "📖 **Історія переписок**\n\nОберіть чат для перегляду:"
-    
+
     # Обробка як повідомлення, так і колбеку
     if update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode='HTML')
     else:
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode='HTML')
+
 
 # --- ІНЛАЙН КНОПКИ ВИКЛАДАЧА ---
 async def teacher_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):

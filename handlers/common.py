@@ -8,9 +8,8 @@ from utils.keyboards import get_main_keyboard, get_calendar_keyboard
 from utils.helpers import format_lesson_time
 from config.settings import IMAGE_WARNING_FILE_ID, logger, KYIV_TZ
 
-# Імпортуємо функції для перегляду історії
-from handlers.teacher import show_teacher_chat_history
-from handlers.student import show_student_chat_history
+# ПРИМІТКА: імпорти show_teacher_chat_history та show_student_chat_history
+# зроблено локально всередині handle_history_button (правило #3: уникнення циклічних імпортів)
 
 async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -176,6 +175,10 @@ async def get_file_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def handle_history_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Локальні імпорти всередині функції — згідно з правилом #3 (уникнення циклічних імпортів)
+    from handlers.teacher import show_teacher_chat_history
+    from handlers.student import show_student_chat_history
+
     user_id = update.effective_user.id
     user_role = db.get_user(user_id)[4]
 
@@ -296,16 +299,31 @@ async def show_chat_page(query, context, page_number: int, files_only: bool = Fa
         [InlineKeyboardButton("⬅️ Назад до меню", callback_data="back_chat_menu")],
     ]
 
-    # Оновлюємо текстове повідомлення
+    # Оновлюємо текстове повідомлення.
+    # Якщо поточне повідомлення є медіа (фото/відео) — edit_message_text поверне 400.
+    # В такому разі видаляємо медіа і надсилаємо нове текстове повідомлення.
     try:
         await query.edit_message_text(
             text,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
         )
-    except Exception:
-        # Повідомлення може бути незмінним (однаковий текст) — ігноруємо
-        pass
+    except Exception as e:
+        err = str(e).lower()
+        if "there is no text in the message" in err or "message can't be edited" in err or "400" in err:
+            # Поточне повідомлення — медіа. Видаляємо і надсилаємо текст заново.
+            chat_id = query.message.chat_id
+            try:
+                await query.delete_message()
+            except Exception:
+                pass
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML"
+            )
+        # Якщо текст не змінився — Telegram теж повертає помилку, просто ігноруємо
 
     """    # --- Відправляємо медіафайли цієї сторінки окремими повідомленнями ---
     if media_file_ids:
@@ -339,15 +357,24 @@ async def show_media_gallery(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     await query.answer()
 
+    # КРИТИЧНО: зберігаємо chat_id ДО delete_message —
+    # після видалення query.message стає None і chat_id недоступний (баг #6)
+    chat_id = query.message.chat_id
+
     # 1. Отримуємо номер поточного медіафайлу
     data_parts = query.data.split("_")
     page = int(data_parts[-1])
 
     all_messages = context.user_data.get('current_chat_messages', [])
 
-    # 2. Фільтруємо всі типи медіа для перегляду
-    media_files = [m for m in all_messages if m[5] in ['photo', 'video', 'document', 'voice', 'audio']]
-
+    # 2. Фільтруємо медіаповідомлення.
+    # Альбоми зберігаються в БД як текст "[АЛЬБОМ N файлів]" без file_id —
+    # такі записи пропускаємо, щоб не отримати "There is no photo in the request"
+    media_files = [
+        m for m in all_messages
+        if m[5] in ['photo', 'video', 'document', 'voice', 'audio']
+           and len(m) > 8 and m[8] and str(m[8]).strip()
+    ]
     if not media_files:
         await query.answer("У цьому чаті медіафайлів не знайдено.", show_alert=True)
         return
@@ -357,13 +384,12 @@ async def show_media_gallery(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     msg = media_files[page]
 
-    # 3. ПРАВИЛЬНІ ІНДЕКСИ (Згідно з вашим SQL JOIN):
+    # 3. ПРАВИЛЬНІ ІНДЕКСИ (Згідно з SQL JOIN):
     # [4] text/caption, [5] type, [6] timestamp, [8] file_id, [11] first_name, [12] last_name
     file_id = msg[8]
     m_type = msg[5]
     raw_caption = msg[4] or ""
 
-    # Екрануємо текст, щоб символи '<' або '>' не ламали HTML-розмітку
     caption = html.escape(raw_caption)
     first_name = html.escape(msg[11] or "") if len(msg) > 11 else ""
     last_name = html.escape(msg[12] or "") if len(msg) > 12 else ""
@@ -394,33 +420,32 @@ async def show_media_gallery(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     keyboard = [
         nav_row,
-        # Повернення до першої сторінки текстової історії (режим "всі повідомлення")
         [InlineKeyboardButton("🔙 До текстової історії", callback_data="chat_page_0_0")]
     ]
 
-    # Видаляємо попереднє вікно, щоб медіа замінювало його
+    # Видаляємо попереднє вікно, щоб медіа замінювало його.
+    # Після цього рядка query.message = None, тому нижче використовуємо збережений chat_id
     await query.delete_message()
 
     try:
-        # Використовуємо правильні методи відправки залежно від типу
         if m_type == 'photo':
-            await context.bot.send_photo(query.message.chat_id, file_id, caption=full_caption, parse_mode='HTML',
+            await context.bot.send_photo(chat_id, file_id, caption=full_caption, parse_mode='HTML',
                                          reply_markup=InlineKeyboardMarkup(keyboard))
         elif m_type == 'video':
-            await context.bot.send_video(query.message.chat_id, file_id, caption=full_caption, parse_mode='HTML',
+            await context.bot.send_video(chat_id, file_id, caption=full_caption, parse_mode='HTML',
                                          reply_markup=InlineKeyboardMarkup(keyboard))
         elif m_type == 'voice':
-            await context.bot.send_voice(query.message.chat_id, file_id, caption=full_caption, parse_mode='HTML',
+            await context.bot.send_voice(chat_id, file_id, caption=full_caption, parse_mode='HTML',
                                          reply_markup=InlineKeyboardMarkup(keyboard))
         elif m_type == 'audio':
-            await context.bot.send_audio(query.message.chat_id, file_id, caption=full_caption, parse_mode='HTML',
+            await context.bot.send_audio(chat_id, file_id, caption=full_caption, parse_mode='HTML',
                                          reply_markup=InlineKeyboardMarkup(keyboard))
         else:  # document
-            await context.bot.send_document(query.message.chat_id, file_id, caption=full_caption, parse_mode='HTML',
+            await context.bot.send_document(chat_id, file_id, caption=full_caption, parse_mode='HTML',
                                             reply_markup=InlineKeyboardMarkup(keyboard))
     except Exception as e:
         await context.bot.send_message(
-            chat_id=query.message.chat_id,
+            chat_id=chat_id,
             text=f"❌ Не вдалося завантажити файл: {e}",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="chat_page_0_0")]])
         )
