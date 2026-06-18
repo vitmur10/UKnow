@@ -1247,7 +1247,14 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "lesson_group_") or data == "cancel_add_lesson" or data.startswith("admin_lesson_target_"):
 
         if data.startswith("admin_select_student"):
-            page = int(data.split("_")[3]) if len(data.split("_")) > 3 else 0
+            parts = data.split("_")
+            try:
+                # Намагаємось отримати номер сторінки, якщо елементів більше 3
+                page = int(parts[3]) if len(parts) > 3 else 0
+            except ValueError:
+                # Якщо 4-й елемент — це текст (наприклад, 'page'),
+                # безпечно залишаємо 0 за замовчуванням
+                page = int(parts[-1]) if parts[-1].isdigit() else 0
             items_per_page = 10
 
             students = db.get_users_by_role('student')
