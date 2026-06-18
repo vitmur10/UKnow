@@ -106,7 +106,6 @@ def _cancel_auto_end(context, chat_id: int):
     for job in context.job_queue.get_jobs_by_name(f"auto_end_{chat_id}"):
         job.schedule_removal()
 
-
 async def _flush_media_group(media_group_id: str, bot, recipients: list,
                              sender_label: str, save_callback,
                              reply_button: "InlineKeyboardMarkup | None" = None):
@@ -127,37 +126,54 @@ async def _flush_media_group(media_group_id: str, bot, recipients: list,
     now_str = now_kyiv_str()
     header = f"{sender_label}  <i>{now_str}</i>"
 
+    # --- Обробка повідомлень та збереження кожного файлу окремо ---
     for i, msg in enumerate(msgs):
         user_caption = msg.caption or ""
+        file_id = None
+        media_type = "text"
+
+        # Визначаємо заголовок (тільки для першого файлу в альбомі)
         if i == 0:
-            # Заголовок тільки на першому файлі, підпис якщо є
             cap = header + (f"\n\n{user_caption}" if user_caption else "")
             parse = 'HTML'
         else:
-            # Наступні файли — без заголовку, тільки підпис якщо є
             cap = user_caption if user_caption else None
             parse = None
 
+        # Визначаємо тип файлу та його ID
         if msg.photo:
             file_id = msg.photo[-1].file_id
+            media_type = "photo"
             media_items.append(InputMediaPhoto(media=file_id, caption=cap, parse_mode=parse))
         elif msg.video:
             file_id = msg.video.file_id
+            media_type = "video"
             media_items.append(InputMediaVideo(media=file_id, caption=cap, parse_mode=parse))
         elif msg.document:
             file_id = msg.document.file_id
+            media_type = "document"
             media_items.append(InputMediaDocument(media=file_id, caption=cap, parse_mode=parse))
         elif msg.audio:
             file_id = msg.audio.file_id
+            media_type = "audio"
             media_items.append(InputMediaAudio(media=file_id, caption=cap, parse_mode=parse))
+
+        # Зберігаємо ПОТОЧНИЙ файл у базу даних через callback
+        if save_callback and file_id:
+            try:
+                # Викликаємо збереження для КОЖНОГО об'єкта в альбомі
+                save_callback(msg_text=user_caption, msg_type=media_type, file_id=file_id)
+            except Exception as e:
+                print(f"[MediaGroup] окрема помилка збереження: {e}")
 
     if not media_items:
         return
 
+    # --- Відправка отримувачам ---
     for r_id in recipients:
         try:
             if len(media_items) == 1:
-                # Одиночний файл — caption і кнопка прямо в copy_message
+                # Одиночний файл
                 await bot.copy_message(
                     chat_id=r_id,
                     from_chat_id=msgs[0].chat.id,
@@ -167,9 +183,8 @@ async def _flush_media_group(media_group_id: str, bot, recipients: list,
                     reply_markup=reply_button
                 )
             else:
-                # Альбом — send_media_group (без reply_markup, Telegram не підтримує)
+                # Весь альбом
                 await bot.send_media_group(chat_id=r_id, media=media_items)
-                # Кнопка окремим повідомленням після альбому
                 if reply_button:
                     await bot.send_message(
                         chat_id=r_id,
@@ -178,12 +193,6 @@ async def _flush_media_group(media_group_id: str, bot, recipients: list,
                     )
         except Exception as e:
             print(f"[MediaGroup] error to {r_id}: {e}")
-
-    if save_callback:
-        try:
-            save_callback(len(media_items))
-        except Exception as e:
-            print(f"[MediaGroup] save error: {e}")
 
     # Одне підтвердження відправнику на весь альбом
     try:
@@ -198,7 +207,6 @@ async def _flush_media_group(media_group_id: str, bot, recipients: list,
             )
     except Exception as e:
         print(f"[MediaGroup] confirm error: {e}")
-
 
 async def student_message_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Отображает список преподавателей и групп, доступных для чата ученику."""
@@ -306,7 +314,13 @@ async def student_message_text(update: Update, context: ContextTypes.DEFAULT_TYP
         ]])
 
         # Зберігаємо повідомлення в БД
-        db.save_message(student_id, target_teacher_id, content_text, message_type='media' if is_media else 'text')
+        db.save_message(
+            from_user_id=student_id,        # Саме from_user_id, а не user_id!
+            to_user_id=target_teacher_id, 
+            group_id=None, 
+            message_text=content_text, 
+            message_type='text' if not is_media else 'media'
+        )
 
         try:
             if is_media:
@@ -421,7 +435,6 @@ async def student_chat_end(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
     return ConversationHandler.END
 
-
 async def student_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     student_id = update.effective_user.id
     student = db.get_user(student_id)
@@ -477,13 +490,15 @@ async def student_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # --- Якщо це частина альбому — буферизуємо ---
     mgid = update.message.media_group_id
     if mgid:
-        def save_cb(count):
+        # ВИПРАВЛЕНО: Тепер callback приймає та зберігає дані кожного медіа
+        def save_cb(msg_text=None, msg_type=None, file_id=None):
             db.save_message(
                 student_id,
                 to_user_id=target_teacher_id,
                 group_id=group_id_for_db,
-                message_text=f"[АЛЬБОМ {count} файлів]",
-                message_type='media'
+                message_text=msg_text,
+                message_type=msg_type,
+                file_id=file_id
             )
 
         # Кнопка відповіді для альбому
@@ -527,8 +542,7 @@ async def student_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
         _reset_auto_end(context, update.effective_user.id, 'student')
         return STUDENT_CHAT_ACTIVE
 
-    # --- Одиночний файл — відправляємо одразу ---
-    # Визначаємо file_id та тип медіа
+    # --- Одиночний файл ---
     msg = update.message
     if msg.photo:
         media_file_id = msg.photo[-1].file_id
@@ -545,37 +559,25 @@ async def student_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
     elif msg.voice:
         media_file_id = msg.voice.file_id
         media_type = 'voice'
-    elif msg.sticker:
-        # Стікер — зберігаємо emoji та назву пака як текст, file_id для відображення
-        sticker = msg.sticker
-        emoji = sticker.emoji or "🎭"
-        pack = sticker.set_name or ""
-        sticker_label = f"[Стікер {emoji}{f' ({pack})' if pack else ''}]"
-        media_file_id = sticker.file_id
-        media_type = 'sticker'
     else:
         media_file_id = None
         media_type = 'media'
 
     def save_single(_=None):
-        # Для стікерів зберігаємо текстовий опис замість порожнього caption
-        text_to_save = sticker_label if media_type == 'sticker' else (update.message.caption or '')
         db.save_message(
             student_id,
             to_user_id=target_teacher_id,
             group_id=group_id_for_db,
-            message_text=text_to_save,
+            message_text=update.message.caption or '',
             message_type=media_type,
             file_id=media_file_id
         )
 
     now_str = now_kyiv_str()
-    # Заголовок йде як підпис прямо на фото/файл — без окремого повідомлення
     header = f"{sender_label}  <i>{now_str}</i>"
     user_caption = update.message.caption or ""
     new_caption = header + (f"\n\n{user_caption}" if user_caption else "")
 
-    # Кнопка "Відповісти" залежно від типу чату
     if chat_type == 'individual':
         target_teacher_id_for_btn = context.user_data.get('student_chat_with')
         r_markup = InlineKeyboardMarkup([[
@@ -595,30 +597,16 @@ async def student_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
         ]])
 
-    sent_count = 0
     for r_id in recipients:
         try:
-            if media_type == 'sticker':
-                # Стікер надсилаємо через send_sticker — caption до нього не підтримується
-                # Тому спочатку текстове повідомлення з заголовком, потім стікер
-                header_text = f"{sender_label}  <i>{now_kyiv_str()}</i>\n{html.escape(sticker_label)}"
-                await context.bot.send_message(
-                    chat_id=r_id,
-                    text=header_text,
-                    parse_mode='HTML',
-                    reply_markup=r_markup
-                )
-                await context.bot.send_sticker(chat_id=r_id, sticker=media_file_id)
-            else:
-                await context.bot.copy_message(
-                    chat_id=r_id,
-                    from_chat_id=update.effective_chat.id,
-                    message_id=update.message.message_id,
-                    caption=new_caption,
-                    parse_mode='HTML',
-                    reply_markup=r_markup
-                )
-            sent_count += 1
+            await context.bot.copy_message(
+                chat_id=r_id,
+                from_chat_id=update.effective_chat.id,
+                message_id=update.message.message_id,
+                caption=new_caption,
+                parse_mode='HTML',
+                reply_markup=r_markup
+            )
         except Exception as e:
             print(f"student_send_media single error to {r_id}: {e}")
 
@@ -944,7 +932,6 @@ async def teacher_message_students(update: Update, context: ContextTypes.DEFAULT
     )
     return TEACHER_MESSAGE_SELECT
 
-
 async def teacher_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обробка медіафайлів від викладача — з підтримкою альбомів."""
     user_id = update.effective_user.id
@@ -998,13 +985,15 @@ async def teacher_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # --- Якщо це частина альбому — буферизуємо ---
     mgid = update.message.media_group_id
     if mgid:
-        def save_cb(count):
+        # ВИПРАВЛЕНО: Новий callback для коректного збереження кожного файлу альбому
+        def save_cb(msg_text=None, msg_type=None, file_id=None):
             db.save_message(
                 user_id,
                 to_user_id=context.user_data.get('teacher_chat_with') if chat_type == 'individual' else None,
                 group_id=group_id_for_db,
-                message_text=f"[АЛЬБОМ {count} файлів]",
-                message_type='media'
+                message_text=msg_text,
+                message_type=msg_type,
+                file_id=file_id
             )
 
         # Кнопка відповіді для альбому
@@ -1048,7 +1037,7 @@ async def teacher_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
         _reset_auto_end(context, update.effective_user.id, 'teacher')
         return TEACHER_CHAT_ACTIVE
 
-    # --- Одиночний файл ---
+    # --- Одиночний файл (тут без змін, вже працювало добре) ---
     now_str = now_kyiv_str()
     user_caption = update.message.caption or ""
     new_caption = (
@@ -1056,7 +1045,6 @@ async def teacher_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
             + (f"\n\n{html.escape(user_caption)}" if user_caption else "")
     )
 
-    # Визначаємо file_id та тип медіа
     msg = update.message
     if msg.photo:
         t_file_id = msg.photo[-1].file_id
@@ -1073,29 +1061,19 @@ async def teacher_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
     elif msg.voice:
         t_file_id = msg.voice.file_id
         t_media_type = 'voice'
-    elif msg.sticker:
-        sticker = msg.sticker
-        t_emoji = sticker.emoji or "🎭"
-        t_pack = sticker.set_name or ""
-        t_sticker_label = f"[Стікер {t_emoji}{f' ({t_pack})' if t_pack else ''}]"
-        t_file_id = sticker.file_id
-        t_media_type = 'sticker'
     else:
         t_file_id = None
         t_media_type = 'media'
 
-    # Для стікерів зберігаємо текстовий опис
-    text_to_save = t_sticker_label if t_media_type == 'sticker' else user_caption
     db.save_message(
         user_id,
         to_user_id=context.user_data.get('teacher_chat_with') if chat_type == 'individual' else None,
         group_id=group_id_for_db,
-        message_text=text_to_save,
+        message_text=user_caption,
         message_type=t_media_type,
         file_id=t_file_id
     )
 
-    sent_count = 0
     for r_id in recipients:
         try:
             if chat_type == 'individual':
@@ -1115,34 +1093,20 @@ async def teacher_send_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         callback_data=f"quick_reply_group_{gid}"
                     )
                 ]])
-            # caption і reply_markup одразу в copy_message — без окремого send_message
-            if t_media_type == 'sticker':
-                # Стікер: спочатку заголовок текстом, потім сам стікер
-                t_header = f"{html.escape(teacher_full_name)}  <i>{now_kyiv_str()}</i>\n{html.escape(t_sticker_label)}"
-                await context.bot.send_message(
-                    chat_id=r_id,
-                    text=t_header,
-                    parse_mode='HTML',
-                    reply_markup=r_markup
-                )
-                await context.bot.send_sticker(chat_id=r_id, sticker=t_file_id)
-            else:
-                await context.bot.copy_message(
-                    chat_id=r_id,
-                    from_chat_id=update.effective_chat.id,
-                    message_id=update.message.message_id,
-                    caption=new_caption,
-                    parse_mode='HTML',
-                    reply_markup=r_markup
-                )
-            sent_count += 1
+            await context.bot.copy_message(
+                chat_id=r_id,
+                from_chat_id=update.effective_chat.id,
+                message_id=update.message.message_id,
+                caption=new_caption,
+                parse_mode='HTML',
+                reply_markup=r_markup
+            )
         except Exception as e:
             print(f"teacher_send_media single error to {r_id}: {e}")
 
     await update.message.reply_text(f"✅ Файл відправлено {target_label}.")
     _reset_auto_end(context, update.effective_user.id, 'teacher')
     return TEACHER_CHAT_ACTIVE
-
 
 async def teacher_send_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """

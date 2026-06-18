@@ -18,7 +18,7 @@ from config.settings import (
     ADMIN_ADD_LESSON_DATE, ADMIN_ADD_LESSON_TIME,
     CREATE_GROUP_NAME, CREATE_GROUP_TYPE, CREATE_GROUP_TEACHER, CREATE_GROUP_STUDENTS,
     BROADCAST_SELECT_TARGET, BROADCAST_WAIT_MESSAGE, ADD_LESSON_TIME, ADD_LESSON_STUDENT, ADD_LESSON_DATE,
-    MESSAGES_PER_PAGE, KYIV_TZ, now_kyiv
+    MESSAGES_PER_PAGE
 )
 
 
@@ -708,78 +708,78 @@ async def cancel_admin_lesson(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 
-async def send_full_user_list(update: Update, context: ContextTypes.DEFAULT_TYPE, role: Optional[str] = None,
-                              page: int = 0):
-    """Показує список користувачів з пагінацією (10 на сторінку)."""
-    query = update.callback_query
+async def send_full_user_list(update: Update, context: ContextTypes.DEFAULT_TYPE, role: Optional[str] = None):
+    """Показує повний список користувачів з можливістю фільтрації."""
+    print(f"\n--- DEBUG: Виклик send_full_user_list ---")
+    print(f"Аргумент role: {role}")
 
-    # Якщо роль не передана як аргумент — беремо з callback_data
-    if not role and query and "_" in query.data:
-        raw = query.data.split("_")[-1]
-        if raw in ('student', 'teacher'):
-            role = raw
+    # Визначаємо, чи це натискання на кнопку
+    query = update.callback_query
+    if query:
+        print(f"Викликано через callback_data: {query.data}")
+        # Якщо роль не прийшла як аргумент, спробуємо дістати її з callback_data
+        if not role and "_" in query.data:
+            role = query.data.split("_")[-1]
+            print(f"Роль вилучена з callback: {role}")
 
     if role == 'student':
         users = db.get_users_by_role('student')
-        title = "👨‍🎓 Список усіх учнів"
+        title = "👨‍🎓 Список усіх учнів:"
         icon = "👨‍🎓"
-        role_key = "student"
     elif role == 'teacher':
         users = db.get_users_by_role('teacher')
-        title = "👨‍🏫 Список усіх викладачів"
+        title = "👨‍🏫 Список усіх викладачів:"
         icon = "👨‍🏫"
-        role_key = "teacher"
     else:
+        print("Отримуємо всіх користувачів (студенти + викладачі)")
         students = db.get_users_by_role('student') or []
         teachers = db.get_users_by_role('teacher') or []
         users = students + teachers
-        title = "👥 Повний список користувачів"
+        title = "👥 Повний список користувачів:"
         icon = "👥"
-        role_key = "all"
+
+    print(f"Знайдено користувачів у БД: {len(users) if users else 0}")
 
     if not users:
-        text = f"{title}\n\n❌ Користувачів не знайдено."
-        keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="back_to_admin_users")]]
-        if query:
-            await query.answer()
-            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-        else:
-            await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-        return
-
-    items_per_page = 10
-    total_pages = max(1, (len(users) + items_per_page - 1) // items_per_page)
-    page = max(0, min(page, total_pages - 1))
-    start_idx = page * items_per_page
-    current_users = users[start_idx: start_idx + items_per_page]
-
-    text = f"{title} (сторінка {page + 1} з {total_pages}):\n\n"
-    for user_data in current_users:
-        try:
-            name = f"{user_data[2]} {user_data[3]}"
-            role_text = user_data[4]
-            text += f"{icon} {name} — {role_text}\n"
-        except Exception as e:
-            print(f"send_full_user_list render error: {e}")
-
-    # Навігація
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton("⬅️", callback_data=f"user_list_page_{role_key}_{page - 1}"))
-    nav.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="ignore"))
-    if page < total_pages - 1:
-        nav.append(InlineKeyboardButton("➡️", callback_data=f"user_list_page_{role_key}_{page + 1}"))
-
-    keyboard = []
-    if len(users) > items_per_page:
-        keyboard.append(nav)
-    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_admin_users")])
-
-    if query:
-        await query.answer()
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        text = f"{title}\n\n❌ Користувачів з такою роллю не знайдено."
     else:
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        text = f"{title}\n\n"
+        for user_data in users:
+            try:
+                # Виводимо в консоль сирі дані, щоб бачити структуру
+                # print(f"DEBUG USER DATA: {user_data}")
+                name = f"{user_data[2]} {user_data[3]}"
+                role_text = user_data[4]
+                text += f"{icon} {name} - {role_text}\n"
+            except Exception as e:
+                print(f"Помилка при обробці user_data {user_data}: {e}")
+
+    keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="back_to_admin_users")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    print(f"Довжина тексту повідомлення: {len(text)} символів")
+
+    try:
+        if len(text) > 4096:
+            print("Текст занадто довгий, розбиваємо на частини...")
+            parts = [text[i:i + 4096] for i in range(0, len(text), 4096)]
+            for i, part in enumerate(parts):
+                if i == len(parts) - 1:
+                    await context.bot.send_message(chat_id=update.effective_chat.id, text=part,
+                                                   reply_markup=reply_markup)
+                else:
+                    await context.bot.send_message(chat_id=update.effective_chat.id, text=part)
+        else:
+            if query:
+                print("Спроба редагування існуючого повідомлення...")
+                await query.answer()
+                await query.edit_message_text(text, reply_markup=reply_markup)
+            else:
+                print("Відправка нового повідомлення...")
+                await update.message.reply_text(text, reply_markup=reply_markup)
+        print("--- DEBUG: Повідомлення успішно відправлено ---\n")
+    except Exception as e:
+        print(f"!!! ПОМИЛКА ПРИ ВІДПРАВЦІ: {e}")
 
 
 async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1923,8 +1923,7 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data in ["list_by_teachers", "list_all_users", "back_to_admin_users", "list_users", "list_by_students",
                   "assign_teacher", "add_teacher", "show_user_filters_menu"] or any(
         data.startswith(prefix) for prefix in
-        ["user_list_page_", "assign_teacher_page_", "change_student_teacher", "change_teacher_for_student_",
-         "assign_new_teacher_",
+        ["change_student_teacher", "change_teacher_for_student_", "assign_new_teacher_",
          "remove_teacher_from_student_", "select_teacher_", "assign_to_student_"]):
 
         # 1. Прості команди
@@ -1944,16 +1943,6 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_full_user_list(update, context, role='student')
             return
 
-        elif data.startswith("user_list_page_"):
-            # Формат: user_list_page_<role_key>_<page>
-            # role_key: student | teacher | all
-            parts = data.split("_")
-            role_key = parts[3]
-            page_num = int(parts[4])
-            role_arg = role_key if role_key in ('student', 'teacher') else None
-            await send_full_user_list(update, context, role=role_arg, page=page_num)
-            return
-
         # 2. Додавання викладача (ID)
         elif data == "add_teacher":
             await query.edit_message_text("Введіть ID користувача, якого хочете зробити викладачем:")
@@ -1961,36 +1950,18 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # 3. Призначення викладача (Початок - вибір викладача)
-        elif data == "assign_teacher" or data.startswith("assign_teacher_page_"):
+        elif data == "assign_teacher":
             teachers = db.get_users_by_role('teacher')
             if not teachers:
                 await query.edit_message_text("Немає викладачів для призначення.")
                 return
-
-            items_per_page = 8
-            page = int(data.split("_")[-1]) if data.startswith("assign_teacher_page_") else 0
-            total_pages = max(1, (len(teachers) + items_per_page - 1) // items_per_page)
-            page = max(0, min(page, total_pages - 1))
-            start_idx = page * items_per_page
-            current_teachers = teachers[start_idx: start_idx + items_per_page]
-
             keyboard = []
-            for teacher in current_teachers:
+            for teacher in teachers:
                 keyboard.append([InlineKeyboardButton(f"👨‍🏫 {teacher[2]} {teacher[3]}",
                                                       callback_data=f"select_teacher_{teacher[0]}")])
-            nav = []
-            if page > 0:
-                nav.append(InlineKeyboardButton("⬅️", callback_data=f"assign_teacher_page_{page - 1}"))
-            nav.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="ignore"))
-            if page < total_pages - 1:
-                nav.append(InlineKeyboardButton("➡️", callback_data=f"assign_teacher_page_{page + 1}"))
-            if len(teachers) > items_per_page:
-                keyboard.append(nav)
             keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data="back_to_menu")])
-            await query.edit_message_text(
-                f"🔗 Призначити викладача\n\nОберіть викладача (сторінка {page + 1} з {total_pages}):",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+            await query.edit_message_text("🔗 Призначити викладача\n\nОберіть викладача:",
+                                          reply_markup=InlineKeyboardMarkup(keyboard))
             return
 
         # 4. Обробка вибору викладача
@@ -2093,7 +2064,14 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # 7. Зміна викладача учня (Вибір учня зі сторінками)
         elif data.startswith("change_student_teacher"):
-            page = int(data.split("_")[3]) if len(data.split("_")) > 3 else 0
+            parts = data.split("_")
+            try:
+                # Намагаємось отримати номер сторінки, якщо елементів більше 3
+                page = int(parts[3]) if len(parts) > 3 else 0
+            except ValueError:
+                # Якщо 4-й елемент — це текст (наприклад, 'page'),
+                # безпечно залишаємо 0 за замовчуванням
+                page = int(parts[-1]) if parts[-1].isdigit() else 0
             items_per_page = 10
 
             students = db.get_users_by_role('student')
@@ -2132,51 +2110,29 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                           reply_markup=InlineKeyboardMarkup(keyboard))
             return
 
-        # 8. Вибір нового вчителя для конкретного учня (з пагінацією)
+        # 8. Вибір нового вчителя для конкретного учня
         elif data.startswith("change_teacher_for_student_"):
-            # Формат: change_teacher_for_student_<student_id> або change_teacher_for_student_<student_id>_page_<page>
-            parts = data.split("_")
-            student_id = int(parts[4])
-            page = int(parts[-1]) if "page" in parts else 0
-
+            student_id = int(data.split("_")[4])
             student = db.get_user(student_id)
             current_teacher = db.get_student_teacher(student_id)
 
             teachers = db.get_users_by_role('teacher')
+            # Відфільтровуємо того, хто вже призначений
             available_teachers = [t for t in teachers if not current_teacher or t[0] != current_teacher[0]]
 
-            items_per_page = 8
-            total_pages = max(1, (len(available_teachers) + items_per_page - 1) // items_per_page)
-            page = max(0, min(page, total_pages - 1))
-            start_idx = page * items_per_page
-            current_t = available_teachers[start_idx: start_idx + items_per_page]
-
             keyboard = []
-            if current_teacher and page == 0:
+            if current_teacher:
                 keyboard.append([InlineKeyboardButton("🗑 Прибрати викладача",
                                                       callback_data=f"remove_teacher_from_student_{student_id}")])
 
-            for t in current_t:
+            for t in available_teachers:
                 keyboard.append([InlineKeyboardButton(f"👨‍🏫 {t[2]} {t[3]}",
                                                       callback_data=f"assign_new_teacher_{student_id}_{t[0]}")])
-
-            nav = []
-            if page > 0:
-                nav.append(InlineKeyboardButton("⬅️",
-                                                callback_data=f"change_teacher_for_student_{student_id}_page_{page - 1}"))
-            nav.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="ignore"))
-            if page < total_pages - 1:
-                nav.append(InlineKeyboardButton("➡️",
-                                                callback_data=f"change_teacher_for_student_{student_id}_page_{page + 1}"))
-            if len(available_teachers) > items_per_page:
-                keyboard.append(nav)
 
             keyboard.append([InlineKeyboardButton("⬅️ До учнів", callback_data="change_student_teacher")])
 
             txt = f"🔄 Зміна викладача для {student[2]} {student[3]}\n"
             txt += f"Зараз: {current_teacher[2]} {current_teacher[3]}" if current_teacher else "Зараз: без викладача"
-            if total_pages > 1:
-                txt += f"\n\nСторінка {page + 1} з {total_pages}:"
 
             await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(keyboard))
             return
@@ -2492,5 +2448,5 @@ async def menu_admin_reports(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"👨‍🎓 Учнів: {students_count}\n"
         f"👨‍🏫 Викладачів: {teachers_count}\n"
         f"👥 Груп: {groups_count}\n"
-        f"📅 Дата: {now_kyiv().strftime('%d.%m.%Y %H:%M')}"
+        f"📅 Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
     )

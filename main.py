@@ -182,9 +182,8 @@ def main():
                 MessageHandler(filters.Regex(r'^Завершити діалог'), teacher_chat_end),
                 MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(r'^Завершити діалог'),
                                teacher_message_text),
-                MessageHandler(
-                    filters.PHOTO | filters.AUDIO | filters.VIDEO | filters.Document.ALL | filters.VOICE | filters.Sticker.ALL,
-                    teacher_send_media)
+                MessageHandler(filters.PHOTO | filters.AUDIO | filters.VIDEO | filters.Document.ALL | filters.VOICE,
+                               teacher_send_media)
             ],
         },
         fallbacks=[
@@ -205,9 +204,8 @@ def main():
             STUDENT_MESSAGE_SELECT: [CallbackQueryHandler(chat_engine_callbacks, pattern="^student_chat_")],
             STUDENT_CHAT_ACTIVE: [
                 MessageHandler(filters.Regex(r'^Завершити діалог'), student_chat_end),
-                MessageHandler(
-                    filters.PHOTO | filters.AUDIO | filters.VIDEO | filters.Document.ALL | filters.VOICE | filters.Sticker.ALL,
-                    student_send_media),
+                MessageHandler(filters.PHOTO | filters.AUDIO | filters.VIDEO | filters.Document.ALL | filters.VOICE,
+                               student_send_media),
                 MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(r'^Завершити діалог'),
                                student_message_text),
             ],

@@ -19,5 +19,3 @@ async def create_backup(db_name: str, backup_dir: str):
     except Exception as e:
         print(f"Помилка створення резервної копії: {e}")
         return None
-
-

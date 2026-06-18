@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 from database.db_manager import db
 from utils.keyboards import get_main_keyboard, get_calendar_keyboard, get_chat_active_keyboard
 from utils.helpers import format_lesson_time
-from config.settings import TEACHER_CHAT_ACTIVE, TEACHER_MESSAGE_SELECT, KYIV_TZ, now_kyiv
+from config.settings import TEACHER_CHAT_ACTIVE, TEACHER_MESSAGE_SELECT
 
 
 async def teacher_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -305,7 +305,7 @@ async def teacher_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     elif data == "schedule_today":
-        today = now_kyiv().date()
+        today = datetime.now().date()
         lessons = db.get_teacher_lessons(user_id, today)
 
         if not lessons:
@@ -315,12 +315,15 @@ async def teacher_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for lesson in lessons:
                 lesson_time = format_lesson_time(lesson[5])
                 if lesson[2]:  # individual lesson
-                    student_name = f"{lesson[9]} {lesson[10]}" if lesson[9] and lesson[
-                        10] else "Невідомо"
+                    # [10]=first_name, [11]=last_name після JOIN
+                    first_name = lesson[10] if (len(lesson) > 10 and lesson[10]) else ""
+                    last_name = lesson[11] if (len(lesson) > 11 and lesson[11]) else ""
+                    student_name = f"{first_name} {last_name}".strip() or "Невідомо"
                     text += f"📚 Час: {lesson_time}\n"
                     text += f"    👨‍🎓 Учень: {student_name} (індивідуально)\n\n"
                 else:  # group lesson
-                    group_name = lesson[11] if lesson[11] else "Невідомо"
+                    # [12]=group_name після JOIN
+                    group_name = lesson[12] if (len(lesson) > 12 and lesson[12]) else "Невідомо"
                     text += f"📚 Час: {lesson_time}\n"
                     text += f"    👥 Група: {group_name}\n\n"
 
@@ -353,8 +356,9 @@ async def teacher_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 # --- ОНОВЛЕНА ЛОГІКА ВИВОДУ (УЧЕНЬ АБО ГРУПА) ---
                 if lesson[2]:  # Індивідуальний учень
-                    first_name = lesson[9] if (len(lesson) > 9 and lesson[9]) else ""
-                    last_name = lesson[10] if (len(lesson) > 10 and lesson[10]) else ""
+                    # [10]=first_name, [11]=last_name після JOIN з users
+                    first_name = lesson[10] if (len(lesson) > 10 and lesson[10]) else ""
+                    last_name = lesson[11] if (len(lesson) > 11 and lesson[11]) else ""
                     full_name = f"{first_name} {last_name}".strip()
                     student_name = full_name if full_name else "Учень"
 
@@ -362,23 +366,20 @@ async def teacher_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     text += f"      👨‍🎓 Учень: {student_name} (індивідуально)\n"
 
                 elif lesson[3]:  # Груповий урок
-                    g_id = lesson[3]
-                    # Намагаємось дістати назву групи з бази за її ID
-                    group_info = db.get_group(g_id)
-                    if group_info:
-                        g_name = group_info[1]  # Індекс 1 — це зазвичай назва групи
-                    else:
-                        # Якщо в базі не знайшли, пробуємо взяти з результату запиту
-                        g_name = lesson[11] if (len(lesson) > 11 and lesson[11]) else "Група"
+                    # [12]=group_name після JOIN з groups
+                    group_name = lesson[12] if (len(lesson) > 12 and lesson[12]) else None
+                    if not group_name:
+                        group_info = db.get_group(lesson[3])
+                        group_name = group_info[1] if group_info else "Група"
 
                     text += f"  📚 Час: {lesson_time}\n"
-                    text += f"      👥 Група: {g_name}\n"
+                    text += f"      👥 Група: {group_name}\n"
 
         keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data="back_schedule")]]
         await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
         return
     elif data == "schedule_calendar":
-        now = now_kyiv()
+        now = datetime.now()
         calendar_keyboard = get_calendar_keyboard(now.year, now.month)
         await query.edit_message_text(
             "📅 Оберіть дату для перегляду розкладу:",

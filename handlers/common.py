@@ -6,7 +6,7 @@ import html
 from database.db_manager import db
 from utils.keyboards import get_main_keyboard, get_calendar_keyboard
 from utils.helpers import format_lesson_time
-from config.settings import IMAGE_WARNING_FILE_ID, logger, KYIV_TZ, now_kyiv
+from config.settings import IMAGE_WARNING_FILE_ID, logger, KYIV_TZ
 
 # ПРИМІТКА: імпорти show_teacher_chat_history та show_student_chat_history
 # зроблено локально всередині handle_history_button (правило #3: уникнення циклічних імпортів)
@@ -213,16 +213,12 @@ def _build_message_card(msg, entity_type: str, current_user_id: int) -> tuple[st
     is_mine = (int(msg[1]) == int(current_user_id))
     direction = "➡️ Ви" if is_mine else f"⬅️ {sender_name}"
 
-    TYPE_ICONS = {"photo": "🖼", "document": "📄", "audio": "🎵", "video": "🎬", "voice": "🎤", "text": "", "sticker": "🎭"}
+    TYPE_ICONS = {"photo": "🖼", "document": "📄", "audio": "🎵", "video": "🎬", "voice": "🎤", "text": ""}
     type_icon = TYPE_ICONS.get(msg_type, "📎")
-
-    # Для стікерів safe_text містить збережений опис "[Стікер 😂]"
-    # Якщо поле порожнє — відображаємо мітку за типом
-    display_text = safe_text if safe_text else ("<i>[стікер]</i>" if msg_type == "sticker" else "<i>[медіа]</i>")
 
     card = (
         f"┌ {direction}  <code>{timestamp[:16]}</code>\n"
-        f"│ {type_icon} {display_text}\n"
+        f"│ {type_icon} {safe_text if safe_text else '<i>[медіа]</i>'}\n"
         f"└──────────────\n"
     )
     return card, file_id
@@ -355,14 +351,10 @@ async def show_chat_page(query, context, page_number: int, files_only: bool = Fa
 
 
 
-
-
 async def show_media_gallery(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # КРИТИЧНО: зберігаємо chat_id ДО delete_message —
-    # після видалення query.message стає None і chat_id недоступний (баг #6)
     chat_id = query.message.chat_id
 
     # 1. Отримуємо номер поточного медіафайлу
@@ -372,20 +364,21 @@ async def show_media_gallery(update: Update, context: ContextTypes.DEFAULT_TYPE)
     all_messages = context.user_data.get('current_chat_messages', [])
 
     # 2. Фільтруємо медіаповідомлення.
-    # Альбоми зберігаються в БД як текст "[АЛЬБОМ N файлів]" без file_id —
-    # такі записи пропускаємо, щоб не отримати "There is no photo in the request"
+    # ТЕПЕР: Нові альбоми мають file_id, тому вони ПРОЙДУТЬ цей фільтр автоматично.
+    # Ми залишаємо перевірку на наявність file_id (m[8]), щоб старі записи-заглушки "[АЛЬБОМ]" 
+    # не викликали помилок, оскільки в них file_id порожній.
     media_files = [
         m for m in all_messages
         if m[5] in ['photo', 'video', 'document', 'voice', 'audio']
            and len(m) > 8 and m[8] and str(m[8]).strip()
     ]
+    
     if not media_files:
         await query.answer("У цьому чаті медіафайлів не знайдено.", show_alert=True)
         return
 
     total_files = len(media_files)
     page = max(0, min(page, total_files - 1))
-
     msg = media_files[page]
 
     # 3. ПРАВИЛЬНІ ІНДЕКСИ (Згідно з SQL JOIN):
@@ -453,6 +446,7 @@ async def show_media_gallery(update: Update, context: ContextTypes.DEFAULT_TYPE)
             text=f"❌ Не вдалося завантажити файл: {e}",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="chat_page_0_0")]])
         )
+
 async def common_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -475,7 +469,7 @@ async def common_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             calendar_keyboard = get_calendar_keyboard(year, month)
             await query.edit_message_reply_markup(reply_markup=calendar_keyboard)
         elif data == "cal_today":
-            now = now_kyiv()
+            now = datetime.now()
             calendar_keyboard = get_calendar_keyboard(now.year, now.month)
             await query.edit_message_reply_markup(reply_markup=calendar_keyboard)
 
@@ -490,7 +484,19 @@ async def common_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     text += "❌ Уроків немає"
                 else:
                     for l in lessons:
-                        text += f"📚 {format_lesson_time(l[5])} — {'інд.' if l[2] else 'група'}\n"
+                        lesson_time = format_lesson_time(l[5])
+                        if l[2]:  # індивідуальний учень
+                            # [10]=first_name, [11]=last_name після JOIN з users
+                            first_name = l[10] if (len(l) > 10 and l[10]) else ""
+                            last_name = l[11] if (len(l) > 11 and l[11]) else ""
+                            student_name = f"{first_name} {last_name}".strip() or "Невідомо"
+                            text += f"📚 Час: {lesson_time}\n"
+                            text += f"    👨‍🎓 Учень: {student_name} (індивідуально)\n\n"
+                        else:  # груповий урок
+                            # [12]=group_name після JOIN з groups
+                            group_name = l[12] if (len(l) > 12 and l[12]) else "Невідомо"
+                            text += f"📚 Час: {lesson_time}\n"
+                            text += f"    👥 Група: {group_name}\n\n"
             else:
                 lessons = db.get_student_lessons(user_id, selected_date)
                 text = f"📅 Календар на {selected_date.strftime('%d.%m.%Y')}\n\n"
