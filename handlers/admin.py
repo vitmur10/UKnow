@@ -2213,7 +2213,7 @@ async def handle_admin_text_states(update: Update, context: ContextTypes.DEFAULT
             await update.message.reply_text("❌ Неправильний ID. Введіть число.")
 
         context.user_data['waiting_for_teacher_id'] = False
-        return
+        return True
     # Обробка пошуку учня для розкладу (адмін)
     elif context.user_data.get('waiting_for_admin_student_search') and user[4] == 'admin':
         context.user_data['waiting_for_admin_student_search'] = False
@@ -2247,7 +2247,7 @@ async def handle_admin_text_states(update: Update, context: ContextTypes.DEFAULT
                 f"🔎 Знайдено учнів: {len(found)}\n\nОберіть учня:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
-        return
+        return True
     # Обробка введення дати для історії чатів
     elif context.user_data.get('waiting_for_date') and user[4] == 'admin':
         try:
@@ -2271,7 +2271,7 @@ async def handle_admin_text_states(update: Update, context: ContextTypes.DEFAULT
             if not messages:
                 text = f"📅 Повідомлення за {date_obj.strftime('%d.%m.%Y')}\n\n❌ Повідомлень немає"
                 await update.message.reply_text(text)
-                return
+                return True
 
             context.user_data['current_chat_messages'] = messages
             context.user_data['current_chat_title'] = f"📅 Повідомлення за {date_obj.strftime('%d.%m.%Y')}"
@@ -2322,12 +2322,12 @@ async def handle_admin_text_states(update: Update, context: ContextTypes.DEFAULT
             ]
 
             await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-            return
+            return True
 
         except ValueError:
             await update.message.reply_text("❌ Неправильний формат дати. Використовуйте ДД.ММ.РРРР")
             context.user_data['waiting_for_date'] = False
-            return
+            return True
     # === БЛОК ПОШУКУ КОРИСТУВАЧІВ ТА ГРУП ===
     elif context.user_data.get('waiting_for_search_name'):
         search_query = update.message.text.strip().lower()
@@ -2365,7 +2365,7 @@ async def handle_admin_text_states(update: Update, context: ContextTypes.DEFAULT
                 f"❌ Нікого не знайдено за запитом '{update.message.text}'.",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
-            return
+            return True
 
         # Формуємо список кнопок
         keyboard = []
@@ -2386,11 +2386,10 @@ async def handle_admin_text_states(update: Update, context: ContextTypes.DEFAULT
             f"✅ Знайдено {len(found_items)} результатів за запитом '{update.message.text}':",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
-        return
+        return True
     else:
-        # Якщо нічого не підійшло, кидаємо у fallback (невідомий текст)
-        from handlers.common import fallback_message
-        await fallback_message(update, context)
+        # Якщо нічого не підійшло — це не адмін-стан, нехай обробляє global_message_handler
+        return False
 
 
 async def menu_admin_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):

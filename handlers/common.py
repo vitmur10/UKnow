@@ -8,6 +8,7 @@ from utils.keyboards import get_main_keyboard, get_calendar_keyboard
 from utils.helpers import format_lesson_time
 from config.settings import IMAGE_WARNING_FILE_ID, logger, KYIV_TZ
 
+
 # ПРИМІТКА: імпорти show_teacher_chat_history та show_student_chat_history
 # зроблено локально всередині handle_history_button (правило #3: уникнення циклічних імпортів)
 
@@ -22,6 +23,7 @@ async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👤 Прізвище: {user.last_name or 'Не вказано'}\n"
         f"📧 Username: @{user.username or 'Не вказано'}"
     )
+
 
 async def manager_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /manager для быстрого доступа к менеджеру"""
@@ -142,11 +144,11 @@ async def fallback_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def handle_unknown_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # 📝 НОВИЙ ТЕКСТ ПОВІДОМЛЕННЯ-ПОПЕРЕДЖЕННЯ
+    # 📝 ОНОВЛЕНИЙ ТЕКСТ ПОВІДОМЛЕННЯ-ПОПЕРЕДЖЕННЯ
     warning_message = (
-        "Привіт! 👋"
-        "\n\n Ваше повідомлення не потрапило до викладача."
-        "\n ❗️Натисніть на **чотири квадратики** біля поля вводу → оберіть    **«💬 Написати викладачу/групі»** → виберіть групу та надішліть повідомлення ✉️"
+        "👋 Я не зрозумів цю команду."
+        "\n\n❗️Щоб написати викладачу, натисніть на **чотири квадратики** біля поля вводу → оберіть "
+        "**«💬 Написати викладачу/групі»** → виберіть групу та надішліть повідомлення ✉️"
     )
 
     chat_id = update.message.chat_id
@@ -223,16 +225,17 @@ def _build_message_card(msg, entity_type: str, current_user_id: int) -> tuple[st
     )
     return card, file_id
 
+
 async def show_chat_page(query, context, page_number: int, files_only: bool = False):
     """
     Відображає сторінку архіву переписки у форматі карток.
     files_only=True — показує лише повідомлення з медіафайлами.
     """
-    bot          = context.bot
-    current_uid  = query.from_user.id
+    bot = context.bot
+    current_uid = query.from_user.id
     all_messages = context.user_data.get('current_chat_messages', [])
-    title        = context.user_data.get('current_chat_title', '📜 Архів переписки')
-    entity_type  = context.user_data.get('current_chat_entity_type', '')
+    title = context.user_data.get('current_chat_title', '📜 Архів переписки')
+    entity_type = context.user_data.get('current_chat_entity_type', '')
 
     # Зберігаємо поточний режим фільтра
     context.user_data['chat_files_only'] = files_only
@@ -350,7 +353,6 @@ async def show_chat_page(query, context, page_number: int, files_only: bool = Fa
                 print(f"[show_chat_page] Не вдалося відправити медіа {fid}: {e}")"""
 
 
-
 async def show_media_gallery(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -365,14 +367,14 @@ async def show_media_gallery(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     # 2. Фільтруємо медіаповідомлення.
     # ТЕПЕР: Нові альбоми мають file_id, тому вони ПРОЙДУТЬ цей фільтр автоматично.
-    # Ми залишаємо перевірку на наявність file_id (m[8]), щоб старі записи-заглушки "[АЛЬБОМ]" 
+    # Ми залишаємо перевірку на наявність file_id (m[8]), щоб старі записи-заглушки "[АЛЬБОМ]"
     # не викликали помилок, оскільки в них file_id порожній.
     media_files = [
         m for m in all_messages
         if m[5] in ['photo', 'video', 'document', 'voice', 'audio']
            and len(m) > 8 and m[8] and str(m[8]).strip()
     ]
-    
+
     if not media_files:
         await query.answer("У цьому чаті медіафайлів не знайдено.", show_alert=True)
         return
@@ -446,6 +448,7 @@ async def show_media_gallery(update: Update, context: ContextTypes.DEFAULT_TYPE)
             text=f"❌ Не вдалося завантажити файл: {e}",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="chat_page_0_0")]])
         )
+
 
 async def common_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
