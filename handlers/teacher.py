@@ -316,14 +316,14 @@ async def teacher_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lesson_time = format_lesson_time(lesson[5])
                 if lesson[2]:  # individual lesson
                     # [10]=first_name, [11]=last_name після JOIN
-                    first_name = lesson[10] if (len(lesson) > 10 and lesson[10]) else ""
-                    last_name = lesson[11] if (len(lesson) > 11 and lesson[11]) else ""
+                    first_name = lesson[8] if (len(lesson) > 8 and lesson[8]) else ""
+                    last_name = lesson[9] if (len(lesson) > 9 and lesson[9]) else ""
                     student_name = f"{first_name} {last_name}".strip() or "Невідомо"
                     text += f"📚 Час: {lesson_time}\n"
                     text += f"    👨‍🎓 Учень: {student_name} (індивідуально)\n\n"
                 else:  # group lesson
                     # [12]=group_name після JOIN
-                    group_name = lesson[12] if (len(lesson) > 12 and lesson[12]) else "Невідомо"
+                    group_name = lesson[10] if (len(lesson) > 10 and lesson[10]) else "Невідомо"
                     text += f"📚 Час: {lesson_time}\n"
                     text += f"    👥 Група: {group_name}\n\n"
 

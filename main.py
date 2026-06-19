@@ -83,8 +83,18 @@ MAIN_MENU_BUTTONS_FILTER = filters.TEXT & filters.Regex(f"^({'|'.join(ALL_MAIN_M
 # ==========================================
 async def global_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Ця функція ловить тексти, які не є кнопками меню.
-    Вона перевіряє права адміна, шукає тригерні слова і кидає невідомий текст у fallback.
+    Єдиний маршрутизатор текстових повідомлень (заміна трьох окремих хендлерів).
+
+    Порядок перевірки:
+    1. Кнопки головного меню (MAIN_MENU_BUTTONS_FILTER) — даємо їм спрацювати
+       через окремі MessageHandler-и, зареєстровані вище (розділ 4),
+       тому сюди такі тексти потрапляти не повинні. Але про всяк випадок,
+       якщо текст все ж є кнопкою меню — не чіпаємо адмін-стани і не вважаємо
+       це "невідомим текстом", а даємо стандартну обробку нижче.
+    2. Перевірка прав/тригерів і стан адмін-діалогів (handle_admin_text_states).
+       Якщо ця функція "обробила" повідомлення (повернула True) — на цьому
+       завершуємо обробку.
+    3. Якщо нічого з вищого не спрацювало — викликаємо handle_unknown_text.
     """
     user_id = update.effective_user.id
     user = db.get_user(user_id)
@@ -93,23 +103,47 @@ async def global_message_handler(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("Спочатку зареєструйтеся за допомогою команди /start")
         return
 
-    message_text = update.message.text
+    message_text = update.message.text or ""
 
-    # 1. Перевірка доступу до адмін-кнопок
+    # 1. Якщо це кнопка головного меню — її мають ловити окремі хендлери
+    # (розділ 4), сюди вона потрапити не повинна. Якщо все ж потрапила
+    # (наприклад, хендлер кнопки ще не зареєстрований) — просто виходимо,
+    # щоб не позначати її як "невідомий текст".
+    if MAIN_MENU_BUTTONS_FILTER.check_update(update):
+        return
+
+    # 2. Перевірка доступу до адмін-кнопок
     admin_buttons = ["👨‍💼 Керування користувачами", "👥 Керування групами", "🗓 Керування розкладом",
                      "🗂️ Переписки / Чати", "📢 Масова розсилка", "📊 Звіти"]
     if message_text in admin_buttons and user[4] != 'admin':
         await update.message.reply_text("❌ У вас немає прав доступу до цієї функції.")
         return
 
-    # 2. Тригерні слова
+    # 3. Тригерні слова
     for trigger in TRIGGER_WORDS:
         if trigger.lower() in message_text.lower():
             db.save_message(user_id, None, f"[TRIGGER: {trigger}] {message_text}", 'trigger')
 
-    # 3. Fallback (якщо ми не в чаті, значить це невідомий текст)
-    if not context.user_data.get('chat_type'):
-        await fallback_message(update, context)
+    # 4. Якщо ми всередині активного чату (student/teacher chat) — це не "невідомий текст",
+    # такі повідомлення обробляються відповідними ConversationHandler-ами раніше в ланцюжку.
+    if context.user_data.get('chat_type'):
+        return
+
+    # 5. Передаємо в обробник адмін-станів.
+    # ВАЖЛИВО: щоб маршрутизація працювала коректно, функція
+    # handle_admin_text_states (у handlers/admin.py) повинна повертати
+    # True, якщо вона "забрала" повідомлення собі (тобто користувач
+    # перебував у відповідному адмін-стані і текст уже оброблено),
+    # і None/False — якщо стан не підійшов і обробку треба передати далі.
+    # Якщо зараз ця функція нічого не повертає (return None за замовчуванням),
+    # просто додайте `return True` у відповідних гілках handle_admin_text_states
+    # там, де повідомлення дійсно було оброблено.
+    handled = await handle_admin_text_states(update, context)
+    if handled:
+        return
+
+    # 6. Жодна умова не спрацювала — це справді невідомий текст
+    await handle_unknown_text(update, context)
 
     # Обгортка для виклику історії учня
 
@@ -145,7 +179,10 @@ def main():
             REGISTER_BIRTHDATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_birthdate)],
             REGISTER_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_phone)],
         },
-        fallbacks=[CommandHandler('cancel', cancel_registration), CommandHandler('start', start)],
+        fallbacks=[
+            CommandHandler('cancel', cancel_registration),
+            CommandHandler('start', start),
+        ],
         allow_reentry=True
     )
 
@@ -156,7 +193,11 @@ def main():
             ADD_LESSON_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_lesson_date)],
             ADD_LESSON_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_lesson_time)],
         },
-        fallbacks=[CommandHandler('cancel', cancel_add_lesson)],
+        fallbacks=[
+            CommandHandler('cancel', cancel_add_lesson),
+            CommandHandler('start', cancel_add_lesson),
+            MessageHandler(MAIN_MENU_BUTTONS_FILTER, cancel_add_lesson),
+        ],
     )
 
     create_group_conv = ConversationHandler(
@@ -168,7 +209,11 @@ def main():
             CREATE_GROUP_STUDENTS: [
                 CallbackQueryHandler(admin_callbacks, pattern="^(toggle_student|student_page|finish_create)")],
         },
-        fallbacks=[CallbackQueryHandler(admin_callbacks, pattern="^cancel_create_group$")],
+        fallbacks=[
+            CallbackQueryHandler(admin_callbacks, pattern="^cancel_create_group$"),
+            CommandHandler('start', start),
+            MessageHandler(MAIN_MENU_BUTTONS_FILTER, start),
+        ],
     )
 
     teacher_message_conv = ConversationHandler(
@@ -234,7 +279,11 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_add_lesson_time),
             ],
         },
-        fallbacks=[CommandHandler('cancel', cancel_admin_lesson)],
+        fallbacks=[
+            CommandHandler('cancel', cancel_admin_lesson),
+            CommandHandler('start', cancel_admin_lesson),
+            MessageHandler(MAIN_MENU_BUTTONS_FILTER, cancel_admin_lesson),
+        ],
     )
 
     broadcast_conv = ConversationHandler(
@@ -250,6 +299,8 @@ def main():
         fallbacks=[
             CallbackQueryHandler(broadcast_cancel, pattern="^cancel_broadcast$"),
             CommandHandler('cancel', broadcast_cancel),
+            CommandHandler('start', broadcast_cancel),
+            MessageHandler(MAIN_MENU_BUTTONS_FILTER, broadcast_cancel),
         ],
     )
 
@@ -328,9 +379,7 @@ def main():
     # ==========================================
     # 7. РЕЗЕРВНІ ОБРОБНИКИ ТЕКСТУ ТА МЕДІА
     # ==========================================
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_text_states))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, global_message_handler))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unknown_text))
 
     print("🚀 Бот запущено...")
     print(f"👑 Головний адміністратор: ID {SUPER_ADMIN_ID}")
