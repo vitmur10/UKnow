@@ -192,12 +192,13 @@ async def handle_history_button(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("Ця функція доступна лише для викладачів та учнів.")
 
 
-MESSAGES_PER_PAGE = 8
+MESSAGES_PER_PAGE = 6
 
 
 def _build_message_card(msg, entity_type: str, current_user_id: int) -> tuple[str, str | None]:
     import html
-    # Згідно з твоїм JOIN: [4] - текст, [5] - тип, [6] - час, [8] - file_id, [11] - ім'я, [12] - прізвище
+    # Згідно з JOIN: [4] - текст, [5] - тип, [6] - час, [8] - file_id.
+    # Ім'я та прізвище відправника — ЗАВЖДИ останні дві колонки після JOIN з users.
     msg_text = (msg[4] or "").strip()
     msg_type = msg[5] if len(msg) > 5 else "text"
     timestamp = msg[6] if len(msg) > 6 else ""
@@ -208,8 +209,8 @@ def _build_message_card(msg, entity_type: str, current_user_id: int) -> tuple[st
     if len(safe_text) > 400:
         safe_text = safe_text[:400] + "..."
 
-    first_name = msg[11] if len(msg) > 11 and msg[11] else ""
-    last_name = msg[12] if len(msg) > 12 and msg[12] else ""
+    first_name = msg[-2] or ""
+    last_name = msg[-1] or ""
     sender_name = html.escape(f"{first_name} {last_name}".strip() or "Невідомо")
 
     is_mine = (int(msg[1]) == int(current_user_id))
@@ -284,11 +285,11 @@ async def show_chat_page(query, context, page_number: int, files_only: bool = Fa
     nav_row = []
     if page_number > 0:
         cb_prev = f"chat_page_{page_number - 1}_{'1' if files_only else '0'}"
-        nav_row.append(InlineKeyboardButton("⬅️", callback_data=cb_prev))
+        nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=cb_prev))
     nav_row.append(InlineKeyboardButton(f"📄 {page_number + 1}/{total_pages}", callback_data="ignore"))
     if page_number < total_pages - 1:
         cb_next = f"chat_page_{page_number + 1}_{'1' if files_only else '0'}"
-        nav_row.append(InlineKeyboardButton("➡️", callback_data=cb_next))
+        nav_row.append(InlineKeyboardButton("Вперед ➡️", callback_data=cb_next))
 
     # Кнопка фільтра
     if files_only:
@@ -299,6 +300,7 @@ async def show_chat_page(query, context, page_number: int, files_only: bool = Fa
     keyboard = [
         nav_row,
         [filter_btn],
+        [InlineKeyboardButton("📥 Завантажити файлом (.txt)", callback_data="export_chat_current")],
         [InlineKeyboardButton("⬅️ Назад до меню", callback_data="back_chat_menu")],
     ]
 
@@ -384,14 +386,14 @@ async def show_media_gallery(update: Update, context: ContextTypes.DEFAULT_TYPE)
     msg = media_files[page]
 
     # 3. ПРАВИЛЬНІ ІНДЕКСИ (Згідно з SQL JOIN):
-    # [4] text/caption, [5] type, [6] timestamp, [8] file_id, [11] first_name, [12] last_name
+    # [4] text/caption, [5] type, [6] timestamp, [8] file_id, [-2] first_name, [-1] last_name
     file_id = msg[8]
     m_type = msg[5]
     raw_caption = msg[4] or ""
 
     caption = html.escape(raw_caption)
-    first_name = html.escape(msg[11] or "") if len(msg) > 11 else ""
-    last_name = html.escape(msg[12] or "") if len(msg) > 12 else ""
+    first_name = html.escape(msg[-2] or "")
+    last_name = html.escape(msg[-1] or "")
     sender = f"{first_name} {last_name}".strip() or "Відправник"
 
     time_str = ""

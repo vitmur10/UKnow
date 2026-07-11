@@ -422,15 +422,21 @@ class Database:
 
         result = []
 
+        # ВАЖЛИВО: явний перелік колонок замість m.* — гарантує стабільні індекси
+        # незалежно від фізичного порядку колонок у таблиці (стара/нова схема):
+        # [0]id [1]from [2]to [3]group [4]text [5]type [6]timestamp [7]is_read [8]file_id [9]first_name [10]last_name
+        select_cols = '''SELECT m.id, m.from_user_id, m.to_user_id, m.group_id,
+                                m.message_text, m.message_type, m.timestamp,
+                                m.is_read, m.file_id,
+                                u.first_name, u.last_name
+                         FROM messages m
+                         JOIN users u ON m.from_user_id = u.user_id'''
+
         if group_id:
-            query = '''SELECT m.*, u.first_name, u.last_name FROM messages m
-                      JOIN users u ON m.from_user_id = u.user_id
-                      WHERE m.group_id = ?'''
+            query = select_cols + ' WHERE m.group_id = ?'
             params = [group_id]
         else:
-            query = '''SELECT m.*, u.first_name, u.last_name FROM messages m
-                      JOIN users u ON m.from_user_id = u.user_id
-                      WHERE ((m.from_user_id = ? AND m.to_user_id = ?) 
+            query = select_cols + ''' WHERE ((m.from_user_id = ? AND m.to_user_id = ?)
                              OR (m.from_user_id = ? AND m.to_user_id = ?))'''
             params = [user1_id, user2_id, user2_id, user1_id]
 
@@ -451,8 +457,6 @@ class Database:
         finally:
             conn.close()
 
-        # Тепер ви можете надрукувати її
-        print(f"DEBUG: Data from get_chat_history: {result}")
         return result
 
     # def get_teacher_students(self, teacher_id):

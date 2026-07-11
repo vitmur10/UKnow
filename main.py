@@ -10,13 +10,11 @@ from telegram.ext import (
 # ==========================================
 from config.settings import (
     BOT_TOKEN, SUPER_ADMIN_ID, TRIGGER_WORDS, ALL_MAIN_MENU_BUTTONS_LIST, logger,
-    # Імпорт станів ConversationHandler
+    # Стани ConversationHandler (чати більше НЕ використовують стани!)
     REGISTER_NAME, REGISTER_LANG, REGISTER_BIRTHDATE, REGISTER_PHONE,
     ADD_LESSON_STUDENT, ADD_LESSON_DATE, ADD_LESSON_TIME,
     CREATE_GROUP_NAME, CREATE_GROUP_TYPE, CREATE_GROUP_TEACHER, CREATE_GROUP_STUDENTS,
-    TEACHER_MESSAGE_SELECT, TEACHER_MESSAGE_TEXT, TEACHER_CHAT_ACTIVE,
     ADMIN_ADD_LESSON_DATE, ADMIN_ADD_LESSON_TIME,
-    STUDENT_MESSAGE_SELECT, STUDENT_CHAT_ACTIVE,
     BROADCAST_SELECT_TARGET, BROADCAST_WAIT_MESSAGE
 )
 
@@ -41,20 +39,17 @@ from handlers.common import (
 
 # Учень
 from handlers.student import (
-    student_callbacks, menu_about_school, menu_school_rules, menu_faq, menu_student_calendar,
-    show_student_chat_history
+    student_callbacks, show_student_chat_history
 )
 
 # Викладач
 from handlers.teacher import (
-    teacher_callbacks, menu_teacher_schedule, menu_teacher_students, menu_teacher_stats,
-    teacher_inbox, show_teacher_groups, teacher_command
+    teacher_callbacks, teacher_command
 )
 
 # Адмін
 from handlers.admin import (
-    admin_callbacks, menu_admin_groups, menu_admin_chats, menu_admin_schedule,
-    menu_admin_users, menu_admin_reports, handle_admin_text_states, init_super_admin,
+    admin_callbacks, handle_admin_text_states, init_super_admin,
     admin_command, make_admin_command, remove_admin_command, admin_list_command,
     check_database_command, backup_command, broadcast_start, broadcast_select_target,
     broadcast_send_media, broadcast_send_message, broadcast_cancel, create_group_name,
@@ -62,12 +57,13 @@ from handlers.admin import (
     admin_add_lesson_time, cancel_admin_lesson, cancel_add_lesson
 )
 
-# Переписки та чати (Тут тепер ВСЯ логіка діалогів)
+# Двигун чатів (БЕЗ ConversationHandler — стан у context.user_data)
 from handlers.chat_engine import (
-    chat_engine_callbacks, student_message_start, quick_reply_start, student_chat_end,
-    student_send_media, student_message_text, teacher_message_students,
-    teacher_quick_reply_start, teacher_chat_end, teacher_message_text, teacher_send_media
+    chat_engine_callbacks, student_message_start, teacher_message_students,
+    quick_reply_start, teacher_quick_reply_start, chat_end,
+    menu_button_router, relay_chat_message, get_active_chat
 )
+
 # ==========================================
 # 4. ІМПОРТ СЕРВІСІВ ТА ФОНОВИХ ЗАДАЧ
 # ==========================================
@@ -77,24 +73,28 @@ from services.google_sheets import test_gs, sync_students_command, sync_teachers
 # Фільтр для кнопок головного меню (щоб виходити з діалогів)
 MAIN_MENU_BUTTONS_FILTER = filters.TEXT & filters.Regex(f"^({'|'.join(ALL_MAIN_MENU_BUTTONS_LIST)})$")
 
+# Фільтр медіа для глобального обробника
+MEDIA_FILTER = (
+    filters.PHOTO | filters.VIDEO | filters.Document.ALL | filters.AUDIO |
+    filters.VOICE | filters.VIDEO_NOTE | filters.ANIMATION | filters.Sticker.ALL
+)
+
 
 # ==========================================
-# ГЛОБАЛЬНИЙ ПЕРЕХОПЛЮВАЧ ПОВІДОМЛЕНЬ
+# ГЛОБАЛЬНИЙ ПЕРЕХОПЛЮВАЧ ТЕКСТОВИХ ПОВІДОМЛЕНЬ
 # ==========================================
 async def global_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Єдиний маршрутизатор текстових повідомлень (заміна трьох окремих хендлерів).
+    Єдиний маршрутизатор текстових повідомлень.
 
     Порядок перевірки:
-    1. Кнопки головного меню (MAIN_MENU_BUTTONS_FILTER) — даємо їм спрацювати
-       через окремі MessageHandler-и, зареєстровані вище (розділ 4),
-       тому сюди такі тексти потрапляти не повинні. Але про всяк випадок,
-       якщо текст все ж є кнопкою меню — не чіпаємо адмін-стани і не вважаємо
-       це "невідомим текстом", а даємо стандартну обробку нижче.
-    2. Перевірка прав/тригерів і стан адмін-діалогів (handle_admin_text_states).
-       Якщо ця функція "обробила" повідомлення (повернула True) — на цьому
-       завершуємо обробку.
-    3. Якщо нічого з вищого не спрацювало — викликаємо handle_unknown_text.
+    1. Реєстрація користувача.
+    2. Тригерні слова (журналюються завжди).
+    3. АКТИВНИЙ ЧАТ (context.user_data) — повідомлення миттєво пересилається
+       співрозмовнику через relay_chat_message. Це заміна ConversationHandler
+       для чатів: користувач ніколи не "застрягає" у стані.
+    4. Адмін-стани (handle_admin_text_states).
+    5. Невідомий текст.
     """
     user_id = update.effective_user.id
     user = db.get_user(user_id)
@@ -105,47 +105,55 @@ async def global_message_handler(update: Update, context: ContextTypes.DEFAULT_T
 
     message_text = update.message.text or ""
 
-    # 1. Якщо це кнопка головного меню — її мають ловити окремі хендлери
-    # (розділ 4), сюди вона потрапити не повинна. Якщо все ж потрапила
-    # (наприклад, хендлер кнопки ще не зареєстрований) — просто виходимо,
-    # щоб не позначати її як "невідомий текст".
+    # Кнопки головного меню ловить окремий хендлер (menu_button_router),
+    # сюди вони потрапити не повинні. Про всяк випадок — просто виходимо.
     if MAIN_MENU_BUTTONS_FILTER.check_update(update):
         return
 
-    # 2. Перевірка доступу до адмін-кнопок
-    admin_buttons = ["👨‍💼 Керування користувачами", "👥 Керування групами", "🗓 Керування розкладом",
-                     "🗂️ Переписки / Чати", "📢 Масова розсилка", "📊 Звіти"]
-    if message_text in admin_buttons and user[4] != 'admin':
-        await update.message.reply_text("❌ У вас немає прав доступу до цієї функції.")
-        return
-
-    # 3. Тригерні слова
+    # Тригерні слова — журналюємо завжди (навіть у активному чаті)
     for trigger in TRIGGER_WORDS:
         if trigger.lower() in message_text.lower():
-            db.save_message(user_id, None, f"[TRIGGER: {trigger}] {message_text}", 'trigger')
+            db.save_message(user_id, None, None, f"[TRIGGER: {trigger}] {message_text}", 'trigger')
 
-    # 4. Якщо ми всередині активного чату (student/teacher chat) — це не "невідомий текст",
-    # такі повідомлення обробляються відповідними ConversationHandler-ами раніше в ланцюжку.
-    if context.user_data.get('chat_type'):
+    # АКТИВНИЙ ЧАТ: миттєве пересилання
+    if get_active_chat(context):
+        await relay_chat_message(update, context)
         return
 
-    # 5. Передаємо в обробник адмін-станів.
-    # ВАЖЛИВО: щоб маршрутизація працювала коректно, функція
-    # handle_admin_text_states (у handlers/admin.py) повинна повертати
-    # True, якщо вона "забрала" повідомлення собі (тобто користувач
-    # перебував у відповідному адмін-стані і текст уже оброблено),
-    # і None/False — якщо стан не підійшов і обробку треба передати далі.
-    # Якщо зараз ця функція нічого не повертає (return None за замовчуванням),
-    # просто додайте `return True` у відповідних гілках handle_admin_text_states
-    # там, де повідомлення дійсно було оброблено.
+    # Пошук користувача за ім'ям (історія переписок)
+    if context.user_data.get('waiting_for_search_name'):
+        await fallback_message(update, context)
+        return
+
+    # Адмін-стани
     handled = await handle_admin_text_states(update, context)
     if handled:
         return
 
-    # 6. Жодна умова не спрацювала — це справді невідомий текст
+    # Невідомий текст
     await handle_unknown_text(update, context)
 
-    # Обгортка для виклику історії учня
+
+# ==========================================
+# ГЛОБАЛЬНИЙ ПЕРЕХОПЛЮВАЧ МЕДІА
+# ==========================================
+async def global_media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Обробляє фото/відео/документи/аудіо/голосові/стікери поза ConversationHandler.
+    Якщо у користувача активний чат — файл миттєво пересилається співрозмовнику
+    (кожен файл альбому окремо, без буферизації — нічого не губиться).
+    """
+    user_id = update.effective_user.id
+    user = db.get_user(user_id)
+    if not user:
+        return
+
+    if get_active_chat(context):
+        await relay_chat_message(update, context)
+        return
+
+    # Медіа поза чатом — підказуємо користувачу, що робити
+    await handle_unknown_text(update, context)
 
 
 async def route_student_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -162,20 +170,17 @@ def main():
 
     # ==========================================
     # 3. CONVERSATION HANDLERS (ДІАЛОГИ)
+    # УВАГА: діалоги чатів (teacher_message_conv / student_message_conv)
+    # ВИДАЛЕНО — чати працюють через глобальні обробники + context.user_data.
     # ==========================================
     registration_conv = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
             REGISTER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_name)],
-
-            # ВИПРАВЛЕНО ТУТ:
             REGISTER_LANG: [
-                # Натискання кнопки має вести саме в register_language
                 CallbackQueryHandler(register_language, pattern="^lang_"),
-                # Якщо користувач замість кнопки надіслав текст — нагадуємо натиснути кнопку
                 MessageHandler(filters.TEXT & ~filters.COMMAND, register_language)
             ],
-
             REGISTER_BIRTHDATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_birthdate)],
             REGISTER_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_phone)],
         },
@@ -214,54 +219,6 @@ def main():
             CommandHandler('start', start),
             MessageHandler(MAIN_MENU_BUTTONS_FILTER, start),
         ],
-    )
-
-    teacher_message_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex(r'^💬 Написати учневі/групі'), teacher_message_students),
-            CallbackQueryHandler(teacher_quick_reply_start, pattern=r'^inbox_reply_\d+$'),
-        ],
-        states={
-            TEACHER_MESSAGE_SELECT: [CallbackQueryHandler(chat_engine_callbacks, pattern="^teacher_chat_")],
-            TEACHER_CHAT_ACTIVE: [
-                MessageHandler(filters.Regex(r'^Завершити діалог'), teacher_chat_end),
-                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(r'^Завершити діалог'),
-                               teacher_message_text),
-                MessageHandler(filters.PHOTO | filters.AUDIO | filters.VIDEO | filters.Document.ALL | filters.VOICE,
-                               teacher_send_media)
-            ],
-        },
-        fallbacks=[
-            CallbackQueryHandler(teacher_callbacks, pattern="^cancel_teacher_chat$"),
-            CommandHandler('cancel', teacher_chat_end),
-            CommandHandler('start', teacher_chat_end),
-            MessageHandler(MAIN_MENU_BUTTONS_FILTER, teacher_chat_end),
-        ],
-        allow_reentry=True,
-    )
-
-    student_message_conv = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex(r'^💬 Написати викладачеві/групі'), student_message_start),
-            CallbackQueryHandler(quick_reply_start, pattern=r'^quick_reply_(teacher|group)_\d+$'),
-        ],
-        states={
-            STUDENT_MESSAGE_SELECT: [CallbackQueryHandler(chat_engine_callbacks, pattern="^student_chat_")],
-            STUDENT_CHAT_ACTIVE: [
-                MessageHandler(filters.Regex(r'^Завершити діалог'), student_chat_end),
-                MessageHandler(filters.PHOTO | filters.AUDIO | filters.VIDEO | filters.Document.ALL | filters.VOICE,
-                               student_send_media),
-                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(r'^Завершити діалог'),
-                               student_message_text),
-            ],
-        },
-        fallbacks=[
-            CallbackQueryHandler(student_callbacks, pattern="^cancel_student_chat$"),
-            CommandHandler('cancel', student_chat_end),
-            CommandHandler('start', student_chat_end),
-            MessageHandler(MAIN_MENU_BUTTONS_FILTER, student_chat_end),
-        ],
-        allow_reentry=True,
     )
 
     admin_lesson_conv = ConversationHandler(
@@ -308,33 +265,19 @@ def main():
     application.add_handler(registration_conv)
     application.add_handler(add_lesson_conv)
     application.add_handler(create_group_conv)
-    application.add_handler(teacher_message_conv)
     application.add_handler(admin_lesson_conv)
-    application.add_handler(student_message_conv)
     application.add_handler(broadcast_conv)
 
     # ==========================================
-    # 4. ОБРОБНИКИ ТЕКСТОВИХ КНОПОК МЕНЮ
+    # 4. КНОПКИ МЕНЮ ТА ЗАВЕРШЕННЯ ЧАТУ
     # ==========================================
-    application.add_handler(MessageHandler(filters.Regex('^🏫 Про школу$'), menu_about_school))
-    application.add_handler(MessageHandler(filters.Regex('^📋 Правила школи$'), menu_school_rules))
-    application.add_handler(MessageHandler(filters.Regex('^❓ Популярні питання$'), menu_faq))
-    application.add_handler(MessageHandler(filters.Regex('^🗓 Мій календар$'), menu_student_calendar))
-    application.add_handler(MessageHandler(filters.Regex('^📖 Історія переписок$'), handle_history_button))
+    # Кнопка завершення активного діалогу (працює завжди)
+    application.add_handler(MessageHandler(filters.Regex(r'^Завершити діалог'), chat_end))
 
-    application.add_handler(MessageHandler(filters.Regex('^📆 Мій розклад$'), menu_teacher_schedule))
-    application.add_handler(MessageHandler(filters.Regex('^👨‍🎓 Мої учні$'), menu_teacher_students))
-    application.add_handler(MessageHandler(filters.Regex('^📚 Мої групи$'), show_teacher_groups))
-    application.add_handler(MessageHandler(filters.Regex('^📊 Статистика$'), menu_teacher_stats))
-    application.add_handler(MessageHandler(filters.Regex('^📬 Вхідні$'), teacher_inbox))
-
-    application.add_handler(MessageHandler(filters.Regex('^👥 Керування групами$'), menu_admin_groups))
-    application.add_handler(MessageHandler(filters.Regex('^🗂️ Переписки / Чати$'), menu_admin_chats))
-    application.add_handler(MessageHandler(filters.Regex('^🗓 Керування розкладом$'), menu_admin_schedule))
-    application.add_handler(MessageHandler(filters.Regex('^👨‍💼 Керування користувачами$'), menu_admin_users))
-    application.add_handler(MessageHandler(filters.Regex('^📊 Звіти$'), menu_admin_reports))
-
-    application.add_handler(MessageHandler(filters.Regex('^📞 Написати менеджеру$'), route_manager_contact))
+    # ЄДИНИЙ маршрутизатор кнопок головного меню.
+    # Він тихо закриває активний чат і викликає потрібну функцію.
+    # ('➕ Додати урок' та '📢 Масова розсилка' перехоплюються conv-хендлерами вище.)
+    application.add_handler(MessageHandler(MAIN_MENU_BUTTONS_FILTER, menu_button_router))
 
     # ==========================================
     # 5. ОБРОБНИКИ КОМАНД (Commands)
@@ -355,12 +298,16 @@ def main():
     application.add_handler(CommandHandler("backup", backup_command))
 
     # ==========================================
-    # 6. ІНЛАЙН РОУТЕРИ (Замість старого button_callback)
-    # ==========================================
-
+    # 6. ІНЛАЙН РОУТЕРИ
     # ВАЖЛИВО: порядок має значення — специфічні патерни ВИЩЕ загальних!
+    # ==========================================
+    # Швидкі відповіді (старт чату по кнопці під повідомленням)
+    application.add_handler(CallbackQueryHandler(teacher_quick_reply_start, pattern=r'^inbox_reply_\d+$'))
+    application.add_handler(CallbackQueryHandler(quick_reply_start, pattern=r'^quick_reply_(teacher|group)_\d+$'))
+
     application.add_handler(CallbackQueryHandler(show_media_gallery, pattern=r'^show_media_gallery_\d+$'))
     application.add_handler(CallbackQueryHandler(chat_engine_callbacks, pattern=r'^chat_page_'))
+    application.add_handler(CallbackQueryHandler(chat_engine_callbacks, pattern=r'^export_chat_current$'))
     # Загальний роутер чатів — один раз (без дублікату)
     application.add_handler(CallbackQueryHandler(chat_engine_callbacks, pattern=r'.*chat.*'))
 
@@ -370,20 +317,25 @@ def main():
     application.add_handler(
         CallbackQueryHandler(teacher_callbacks, pattern='^(inbox|schedule|back_schedule|back_to_schedule)'))
 
-    # Оновлюємо патерн для адміна, додавши чіткі префікси для викладачів
     application.add_handler(CallbackQueryHandler(
         admin_callbacks,
         pattern='^(admin|show|toggle|confirm|list|edit|change|assign|add|remove|manage|back_admin|back_groups|group_type|select_group|select_teacher|assign_to_student|student_page|finish_create|cancel_create)'
     ))
 
+    # Спільні callback-и (календар, back_to_menu, ignore)
+    application.add_handler(CallbackQueryHandler(common_callbacks,
+                                                 pattern='^(ignore|back_to_menu|cal_|back_to_calendar_)'))
+
     # ==========================================
-    # 7. РЕЗЕРВНІ ОБРОБНИКИ ТЕКСТУ ТА МЕДІА
+    # 7. ГЛОБАЛЬНІ ОБРОБНИКИ ТЕКСТУ ТА МЕДІА
+    # (сюди потрапляють повідомлення активних чатів — миттєве пересилання)
     # ==========================================
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, global_message_handler))
+    application.add_handler(MessageHandler(MEDIA_FILTER, global_media_handler))
 
     print("🚀 Бот запущено...")
     print(f"👑 Головний адміністратор: ID {SUPER_ADMIN_ID}")
-    print("📅 Автоматические напоминания об уроках настроены на 8:00")
+    print("📅 Автоматичні нагадування про уроки налаштовані на 8:00")
 
     application.run_polling()
 
