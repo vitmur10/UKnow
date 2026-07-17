@@ -57,6 +57,25 @@ class Database:
             cursor.execute("ALTER TABLE messages ADD COLUMN file_id TEXT")
         except Exception:
             pass
+        # Міграція: прапорець "видалено для всіх"
+        try:
+            cursor.execute("ALTER TABLE messages ADD COLUMN is_deleted BOOLEAN DEFAULT 0")
+        except Exception:
+            pass
+
+        # Доставлені копії повідомлень (для функції "видалити для всіх"):
+        # для кожного запису messages зберігаємо telegram message_id у кожному чаті,
+        # куди його було доставлено (включно з чатом відправника).
+        cursor.execute('''CREATE TABLE IF NOT EXISTS delivered_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_db_id INTEGER,
+            chat_id INTEGER,
+            tg_message_id INTEGER,
+            created DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (message_db_id) REFERENCES messages (id)
+        )''')
+        cursor.execute('''CREATE INDEX IF NOT EXISTS idx_delivered_lookup
+                          ON delivered_messages (chat_id, tg_message_id)''')
 
         cursor.execute('''CREATE TABLE IF NOT EXISTS lessons (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -407,12 +426,64 @@ class Database:
 
     def save_message(self, from_user_id, to_user_id=None, group_id=None, message_text="", message_type='text',
                      file_id=None):
+        """Зберігає повідомлення і повертає його id у таблиці messages."""
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
-        cursor.execute('''INSERT INTO messages 
-                         (from_user_id, to_user_id, group_id, message_text, message_type, file_id) 
+        cursor.execute('''INSERT INTO messages
+                         (from_user_id, to_user_id, group_id, message_text, message_type, file_id)
                          VALUES (?, ?, ?, ?, ?, ?)''',
                        (from_user_id, to_user_id, group_id, message_text, message_type, file_id))
+        message_db_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return message_db_id
+
+    # ==================================================================
+    # "ВИДАЛИТИ ДЛЯ ВСІХ": облік доставлених копій
+    # ==================================================================
+
+    def save_delivery(self, message_db_id, chat_id, tg_message_id):
+        """Фіксує доставлену копію повідомлення у конкретному чаті."""
+        if not message_db_id or not tg_message_id:
+            return
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute('''INSERT INTO delivered_messages (message_db_id, chat_id, tg_message_id)
+                          VALUES (?, ?, ?)''', (message_db_id, chat_id, tg_message_id))
+        conn.commit()
+        conn.close()
+
+    def find_message_by_delivery(self, chat_id, tg_message_id):
+        """
+        За (chat_id, tg_message_id) знаходить запис messages.
+        Повертає (message_db_id, from_user_id) або None.
+        """
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute('''SELECT d.message_db_id, m.from_user_id
+                          FROM delivered_messages d
+                          JOIN messages m ON m.id = d.message_db_id
+                          WHERE d.chat_id = ? AND d.tg_message_id = ?''',
+                       (chat_id, tg_message_id))
+        result = cursor.fetchone()
+        conn.close()
+        return result
+
+    def get_deliveries(self, message_db_id):
+        """Всі доставлені копії повідомлення: список (chat_id, tg_message_id)."""
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute('''SELECT chat_id, tg_message_id FROM delivered_messages
+                          WHERE message_db_id = ?''', (message_db_id,))
+        result = cursor.fetchall()
+        conn.close()
+        return result
+
+    def mark_message_deleted(self, message_db_id):
+        """Позначає повідомлення видаленим (текст лишається в БД для адміна)."""
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE messages SET is_deleted = 1 WHERE id = ?", (message_db_id,))
         conn.commit()
         conn.close()
 
@@ -433,10 +504,11 @@ class Database:
                          JOIN users u ON m.from_user_id = u.user_id'''
 
         if group_id:
-            query = select_cols + ' WHERE m.group_id = ?'
+            query = select_cols + ' WHERE COALESCE(m.is_deleted, 0) = 0 AND m.group_id = ?'
             params = [group_id]
         else:
-            query = select_cols + ''' WHERE ((m.from_user_id = ? AND m.to_user_id = ?)
+            query = select_cols + ''' WHERE COALESCE(m.is_deleted, 0) = 0
+                             AND ((m.from_user_id = ? AND m.to_user_id = ?)
                              OR (m.from_user_id = ? AND m.to_user_id = ?))'''
             params = [user1_id, user2_id, user2_id, user1_id]
 

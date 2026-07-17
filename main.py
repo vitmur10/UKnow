@@ -61,7 +61,7 @@ from handlers.admin import (
 from handlers.chat_engine import (
     chat_engine_callbacks, student_message_start, teacher_message_students,
     quick_reply_start, teacher_quick_reply_start, chat_end,
-    menu_button_router, relay_chat_message, get_active_chat
+    menu_button_router, relay_chat_message, get_active_chat, delete_for_everyone
 )
 
 # ==========================================
@@ -160,6 +160,19 @@ async def route_student_history(update: Update, context: ContextTypes.DEFAULT_TY
     await show_student_chat_history(update, context, update.effective_user.id)
 
 
+async def exit_conv_and_route(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Кнопка головного меню, натиснута ВСЕРЕДИНІ діалогу (напр. додавання уроку):
+    виходимо з ConversationHandler, чистимо тимчасові дані і ОДРАЗУ виконуємо
+    дію натиснутої кнопки — користувач не застрягає у стані.
+    """
+    for key in ('lesson_date', 'lesson_student_id', 'lesson_group_id',
+                'admin_lesson_date', 'admin_lesson_target'):
+        context.user_data.pop(key, None)
+    await menu_button_router(update, context)
+    return ConversationHandler.END
+
+
 def main():
     # 1. Ініціалізація бота
     application = Application.builder().token(BOT_TOKEN).build()
@@ -195,13 +208,21 @@ def main():
         entry_points=[MessageHandler(filters.Regex(r'^➕ Додати урок'), add_lesson_start)],
         states={
             ADD_LESSON_STUDENT: [CallbackQueryHandler(admin_callbacks, pattern="^(lesson_student|lesson_group)")],
-            ADD_LESSON_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_lesson_date)],
-            ADD_LESSON_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_lesson_time)],
+            ADD_LESSON_DATE: [
+                # ВАЖЛИВО: кнопки меню — ПЕРШИМИ, інакше вони потрапляють
+                # у add_lesson_date і користувач бачить "Неправильний формат дати"
+                MessageHandler(MAIN_MENU_BUTTONS_FILTER, exit_conv_and_route),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, add_lesson_date),
+            ],
+            ADD_LESSON_TIME: [
+                MessageHandler(MAIN_MENU_BUTTONS_FILTER, exit_conv_and_route),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, add_lesson_time),
+            ],
         },
         fallbacks=[
             CommandHandler('cancel', cancel_add_lesson),
             CommandHandler('start', cancel_add_lesson),
-            MessageHandler(MAIN_MENU_BUTTONS_FILTER, cancel_add_lesson),
+            MessageHandler(MAIN_MENU_BUTTONS_FILTER, exit_conv_and_route),
         ],
     )
 
@@ -228,18 +249,18 @@ def main():
         ],
         states={
             ADMIN_ADD_LESSON_DATE: [
-                MessageHandler(MAIN_MENU_BUTTONS_FILTER, cancel_admin_lesson),
+                MessageHandler(MAIN_MENU_BUTTONS_FILTER, exit_conv_and_route),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_add_lesson_date),
             ],
             ADMIN_ADD_LESSON_TIME: [
-                MessageHandler(MAIN_MENU_BUTTONS_FILTER, cancel_admin_lesson),
+                MessageHandler(MAIN_MENU_BUTTONS_FILTER, exit_conv_and_route),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, admin_add_lesson_time),
             ],
         },
         fallbacks=[
             CommandHandler('cancel', cancel_admin_lesson),
             CommandHandler('start', cancel_admin_lesson),
-            MessageHandler(MAIN_MENU_BUTTONS_FILTER, cancel_admin_lesson),
+            MessageHandler(MAIN_MENU_BUTTONS_FILTER, exit_conv_and_route),
         ],
     )
 
@@ -282,6 +303,9 @@ def main():
     # ==========================================
     # 5. ОБРОБНИКИ КОМАНД (Commands)
     # ==========================================
+    # Видалення власного повідомлення "для всіх" (reply + /del)
+    application.add_handler(CommandHandler('del', delete_for_everyone))
+
     application.add_handler(CommandHandler('admin', admin_command))
     application.add_handler(CommandHandler('manager', manager_command))
     application.add_handler(CommandHandler('teacher', teacher_command))

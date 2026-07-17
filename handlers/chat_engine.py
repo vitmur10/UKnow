@@ -28,7 +28,7 @@ from database.db_manager import db
 from utils.keyboards import get_main_keyboard, get_chat_active_keyboard
 from utils.helpers import is_lesson_link
 from config.settings import (
-    now_kyiv_str, now_kyiv, CHAT_AUTO_END_MINUTES, ALL_MAIN_MENU_BUTTONS_LIST,
+    now_kyiv_str, now_kyiv, ALL_MAIN_MENU_BUTTONS_LIST,
 )
 
 # ==========================================================================
@@ -102,6 +102,9 @@ async def start_chat_session(context: ContextTypes.DEFAULT_TYPE, user_id: int,
         who = "учнем" if role == 'teacher' else "викладачем"
         text = f"💬 Ви зараз спілкуєтесь з {who}: <b>{peer_name}</b>"
 
+    text += ("\n\n<i>Щоб видалити своє повідомлення у всіх — зробіть на нього "
+             "reply (відповісти) з командою /del</i>")
+
     try:
         service_msg = await context.bot.send_message(
             chat_id=user_id,
@@ -121,8 +124,6 @@ async def start_chat_session(context: ContextTypes.DEFAULT_TYPE, user_id: int,
     except Exception as e:
         print(f"[chat] start session error: {e}")
 
-    _reset_auto_end(context, user_id, role)
-
 
 async def end_chat_session(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     """Тихо завершує чат: відкріплення, очищення стану, скасування таймера."""
@@ -132,46 +133,20 @@ async def end_chat_session(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
 
 
 # ==========================================================================
-# ТАЙМЕР АВТО-ЗАВЕРШЕННЯ
+# АВТО-ЗАВЕРШЕННЯ ВИДАЛЕНО (фідбек користувачів: повідомлення про 5 хв
+# бездіяльності — зайве). Закріплене сервісне повідомлення завжди показує,
+# з ким триває діалог, тому таймер не потрібен. Чат закривається кнопкою
+# "Завершити діалог" або будь-якою кнопкою головного меню.
+# Прибираємо застарілі job-и попередньої версії, якщо вони ще у черзі.
 # ==========================================================================
 
-async def _auto_end_chat(context):
-    """Автоматично завершує чат після бездіяльності."""
-    data = context.job.data
-    chat_id = data['chat_id']
-    role = data['role']
-
-    await _unpin_service_message(context, chat_id)
-    _clear_chat_state(context)
-
-    try:
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=f"⏱ Чат автоматично завершено через {CHAT_AUTO_END_MINUTES} хв. бездіяльності.",
-            reply_markup=get_main_keyboard(role)
-        )
-    except Exception as e:
-        print(f"[auto_end_chat] помилка: {e}")
-
-
-def _reset_auto_end(context, chat_id: int, role: str):
-    """Скидає таймер бездіяльності."""
-    name = f"auto_end_{chat_id}"
-    for job in context.job_queue.get_jobs_by_name(name):
-        job.schedule_removal()
-    context.job_queue.run_once(
-        _auto_end_chat,
-        when=CHAT_AUTO_END_MINUTES * 60,
-        data={'chat_id': chat_id, 'role': role},
-        name=name,
-        chat_id=chat_id,
-        user_id=chat_id
-    )
-
-
 def _cancel_auto_end(context, chat_id: int):
-    for job in context.job_queue.get_jobs_by_name(f"auto_end_{chat_id}"):
-        job.schedule_removal()
+    """Скасовує застарілі таймери авто-завершення (сумісність зі старою версією)."""
+    try:
+        for job in context.job_queue.get_jobs_by_name(f"auto_end_{chat_id}"):
+            job.schedule_removal()
+    except Exception:
+        pass
 
 
 # ==========================================================================
@@ -210,6 +185,12 @@ async def menu_button_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Тихо закриваємо активний чат
     if get_active_chat(context):
         await end_chat_session(context, user_id)
+
+    # Чистимо "залиплі" прапорці очікування вводу (дата/пошук в історії),
+    # щоб користувач не отримував "Неправильний формат дати" на кнопки меню
+    context.user_data.pop('waiting_for_date', None)
+    context.user_data.pop('waiting_for_search_name', None)
+    context.user_data.pop('search_chat_type', None)
 
     # Захист адмін-кнопок
     admin_buttons = ["👨‍💼 Керування користувачами", "👥 Керування групами", "🗓 Керування розкладом",
@@ -486,7 +467,6 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if not recipients:
         await msg.reply_text("❌ Не вдалося визначити отримувача.")
-        _reset_auto_end(context, sender_id, sender_role)
         return True
 
     # --- Вміст ---
@@ -502,8 +482,9 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return True  # порожнє — ігноруємо
 
     # --- Збереження в БД (кожне повідомлення/файл окремо) ---
+    msg_db_id = None
     try:
-        db.save_message(
+        msg_db_id = db.save_message(
             from_user_id=sender_id,
             to_user_id=to_user_id_for_db,
             group_id=group_id_for_db,
@@ -511,6 +492,8 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
             message_type=media_type,
             file_id=file_id
         )
+        # Фіксуємо оригінал у чаті відправника (щоб /del міг знайти повідомлення)
+        db.save_delivery(msg_db_id, sender_id, msg.message_id)
     except Exception as e:
         print(f"[relay] db save error: {e}")
 
@@ -550,6 +533,7 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     parse_mode='HTML',
                     reply_markup=reply_markup
                 )
+                db.save_delivery(msg_db_id, r_id, sent_msg.message_id)
                 if lesson_link:
                     try:
                         await context.bot.pin_chat_message(
@@ -561,16 +545,17 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
             elif media_type in ('photo', 'video', 'document', 'audio', 'animation'):
                 if is_album_tail:
                     # Хвіст альбому — копіюємо з оригінальним підписом, без заголовка
-                    await context.bot.copy_message(
+                    copied = await context.bot.copy_message(
                         chat_id=r_id,
                         from_chat_id=msg.chat.id,
                         message_id=msg.message_id
                     )
+                    db.save_delivery(msg_db_id, r_id, copied.message_id)
                 else:
                     caption = header + (f"\n\n{html.escape(content_text)}" if content_text else "")
                     if len(caption) > 1000:
                         caption = caption[:997] + "…"
-                    await context.bot.copy_message(
+                    copied = await context.bot.copy_message(
                         chat_id=r_id,
                         from_chat_id=msg.chat.id,
                         message_id=msg.message_id,
@@ -578,22 +563,27 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         parse_mode='HTML',
                         reply_markup=reply_markup
                     )
+                    db.save_delivery(msg_db_id, r_id, copied.message_id)
 
             elif media_type == 'sticker':
-                await context.bot.send_message(
+                header_msg = await context.bot.send_message(
                     chat_id=r_id, text=header, parse_mode='HTML',
                     reply_markup=reply_markup)
-                await context.bot.send_sticker(chat_id=r_id, sticker=msg.sticker.file_id)
+                sticker_msg = await context.bot.send_sticker(chat_id=r_id, sticker=msg.sticker.file_id)
+                db.save_delivery(msg_db_id, r_id, header_msg.message_id)
+                db.save_delivery(msg_db_id, r_id, sticker_msg.message_id)
 
             else:  # voice, video_note — не підтримують caption
-                await context.bot.send_message(
+                header_msg = await context.bot.send_message(
                     chat_id=r_id, text=header, parse_mode='HTML',
                     reply_markup=reply_markup)
-                await context.bot.copy_message(
+                copied = await context.bot.copy_message(
                     chat_id=r_id,
                     from_chat_id=msg.chat.id,
                     message_id=msg.message_id
                 )
+                db.save_delivery(msg_db_id, r_id, header_msg.message_id)
+                db.save_delivery(msg_db_id, r_id, copied.message_id)
 
             delivered += 1
         except Exception as e:
@@ -607,8 +597,75 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
         except Exception:
             pass
 
-    _reset_auto_end(context, sender_id, sender_role)
     return True
+
+
+# ==========================================================================
+# ВИДАЛЕННЯ ПОВІДОМЛЕННЯ "ДЛЯ ВСІХ" (/del у reply на своє повідомлення)
+# ==========================================================================
+
+async def delete_for_everyone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /del у відповідь (reply) на власне повідомлення у чаті з ботом.
+    Видаляє це повідомлення у відправника та в усіх отримувачів
+    (Telegram дозволяє видалення протягом 48 годин).
+    В БД повідомлення позначається is_deleted=1: зі звичайної історії воно
+    зникає, але адміністратор бачить його в архіві з позначкою 🗑.
+    """
+    user_id = update.effective_user.id
+    cmd_msg = update.message
+    reply = cmd_msg.reply_to_message
+
+    # Прибираємо саму команду /del, щоб не смітити в чаті
+    async def _cleanup_command():
+        try:
+            await context.bot.delete_message(chat_id=user_id, message_id=cmd_msg.message_id)
+        except Exception:
+            pass
+
+    if not reply:
+        await _cleanup_command()
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="ℹ️ Щоб видалити повідомлення у всіх, зробіть на нього reply "
+                 "(відповісти) і надішліть /del")
+        return
+
+    found = db.find_message_by_delivery(user_id, reply.message_id)
+    if not found:
+        await _cleanup_command()
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="❌ Це повідомлення не знайдено серед надісланих через бота.")
+        return
+
+    msg_db_id, from_user_id = found
+
+    # Видаляти можна лише ВЛАСНІ повідомлення
+    if int(from_user_id) != int(user_id):
+        await _cleanup_command()
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="❌ Видаляти можна лише власні повідомлення.")
+        return
+
+    deliveries = db.get_deliveries(msg_db_id)
+    failed = 0
+    for chat_id, tg_message_id in deliveries:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=tg_message_id)
+        except Exception as e:
+            failed += 1
+            print(f"[del] не вдалося видалити {tg_message_id} у {chat_id}: {e}")
+
+    db.mark_message_deleted(msg_db_id)
+    await _cleanup_command()
+
+    if failed:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text="⚠️ Повідомлення видалено, але не скрізь: Telegram дозволяє "
+                 "видалення лише протягом 48 годин після надсилання.")
 
 
 # ==========================================================================
@@ -899,9 +956,13 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
                 cursor = conn.cursor()
                 # Явний перелік колонок — ті самі індекси, що й у db.get_chat_history:
                 # [4]text [5]type [6]timestamp [8]file_id [-2]first_name [-1]last_name
+                # Адмін бачить і видалені повідомлення — з позначкою 🗑
                 sql_query = '''
                     SELECT m.id, m.from_user_id, m.to_user_id, m.group_id,
-                           m.message_text, m.message_type, m.timestamp,
+                           CASE WHEN COALESCE(m.is_deleted, 0) = 1
+                                THEN '🗑 [видалено] ' || COALESCE(m.message_text, '')
+                                ELSE m.message_text END AS message_text,
+                           m.message_type, m.timestamp,
                            m.is_read, m.file_id,
                            u.first_name, u.last_name
                     FROM messages m
