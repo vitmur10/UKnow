@@ -487,7 +487,8 @@ class Database:
         conn.commit()
         conn.close()
 
-    def get_chat_history(self, user1_id=None, user2_id=None, group_id=None, date_from=None, date_to=None):
+    def get_chat_history(self, user1_id=None, user2_id=None, group_id=None,
+                         date_from=None, date_to=None, include_deleted=False):
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
 
@@ -495,21 +496,30 @@ class Database:
 
         # ВАЖЛИВО: явний перелік колонок замість m.* — гарантує стабільні індекси
         # незалежно від фізичного порядку колонок у таблиці (стара/нова схема):
-        # [0]id [1]from [2]to [3]group [4]text [5]type [6]timestamp [7]is_read [8]file_id [9]first_name [10]last_name
+        # [0]id [1]from [2]to [3]group [4]text [5]type [6]timestamp [7]is_read
+        # [8]file_id [9]first_name [10]last_name [11]is_deleted
         select_cols = '''SELECT m.id, m.from_user_id, m.to_user_id, m.group_id,
                                 m.message_text, m.message_type, m.timestamp,
                                 m.is_read, m.file_id,
-                                u.first_name, u.last_name
+                                u.first_name, u.last_name,
+                                COALESCE(m.is_deleted, 0)
                          FROM messages m
                          JOIN users u ON m.from_user_id = u.user_id'''
 
         if group_id:
-            query = select_cols + ' WHERE COALESCE(m.is_deleted, 0) = 0 AND m.group_id = ?'
+            if include_deleted:
+                query = select_cols + ' WHERE m.group_id = ?'
+            else:
+                query = select_cols + ' WHERE COALESCE(m.is_deleted, 0) = 0 AND m.group_id = ?'
             params = [group_id]
         else:
-            query = select_cols + ''' WHERE COALESCE(m.is_deleted, 0) = 0
-                             AND ((m.from_user_id = ? AND m.to_user_id = ?)
-                             OR (m.from_user_id = ? AND m.to_user_id = ?))'''
+            if include_deleted:
+                query = select_cols + ''' WHERE ((m.from_user_id = ? AND m.to_user_id = ?)
+                                 OR (m.from_user_id = ? AND m.to_user_id = ?))'''
+            else:
+                query = select_cols + ''' WHERE COALESCE(m.is_deleted, 0) = 0
+                                 AND ((m.from_user_id = ? AND m.to_user_id = ?)
+                                 OR (m.from_user_id = ? AND m.to_user_id = ?))'''
             params = [user1_id, user2_id, user2_id, user1_id]
 
         if date_from:

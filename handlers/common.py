@@ -197,12 +197,13 @@ MESSAGES_PER_PAGE = 6
 
 def _build_message_card(msg, entity_type: str, current_user_id: int) -> tuple[str, str | None]:
     import html
-    # Згідно з JOIN: [4] - текст, [5] - тип, [6] - час, [8] - file_id.
+    # Згідно з JOIN: [4] - текст, [5] - тип, [6] - час, [8] - file_id, [11] - is_deleted.
     # Ім'я та прізвище відправника — ЗАВЖДИ останні дві колонки після JOIN з users.
     msg_text = (msg[4] or "").strip()
     msg_type = msg[5] if len(msg) > 5 else "text"
     timestamp = msg[6] if len(msg) > 6 else ""
     file_id = msg[8] if len(msg) > 8 and msg[8] else None
+    is_deleted = (msg[11] == 1) if len(msg) > 11 else False
 
     # Екрануємо текст, щоб HTML не "ламався"
     safe_text = html.escape(msg_text)
@@ -219,18 +220,25 @@ def _build_message_card(msg, entity_type: str, current_user_id: int) -> tuple[st
     TYPE_ICONS = {"photo": "🖼", "document": "📄", "audio": "🎵", "video": "🎬", "voice": "🎤", "text": ""}
     type_icon = TYPE_ICONS.get(msg_type, "📎")
 
+    deleted_prefix = "🗑 " if is_deleted else ""
+    content = safe_text if safe_text else '<i>[медіа]</i>'
+    if is_deleted and not safe_text:
+        content = '<i>[видалено]</i>'
+
     card = (
-        f"┌ {direction}  <code>{timestamp[:16]}</code>\n"
-        f"│ {type_icon} {safe_text if safe_text else '<i>[медіа]</i>'}\n"
+        f"┌ {deleted_prefix}{direction}  <code>{timestamp[:16]}</code>\n"
+        f"│ {type_icon} {content}\n"
         f"└──────────────\n"
     )
     return card, file_id
 
 
-async def show_chat_page(query, context, page_number: int, files_only: bool = False):
+async def show_chat_page(query, context, page_number: int, files_only: bool = False,
+                         deleted_only: bool = False):
     """
     Відображає сторінку архіву переписки у форматі карток.
     files_only=True — показує лише повідомлення з медіафайлами.
+    deleted_only=True — показує лише видалені повідомлення (лише для адміна).
     """
     bot = context.bot
     current_uid = query.from_user.id
@@ -238,14 +246,24 @@ async def show_chat_page(query, context, page_number: int, files_only: bool = Fa
     title = context.user_data.get('current_chat_title', '📜 Архів переписки')
     entity_type = context.user_data.get('current_chat_entity_type', '')
 
+    user = db.get_user(current_uid)
+    user_role = user[4] if user else 'student'
+    is_admin = (user_role == 'admin')
+
     # Зберігаємо поточний режим фільтра
     context.user_data['chat_files_only'] = files_only
+    context.user_data['chat_deleted_only'] = deleted_only
 
-    # Фільтруємо, якщо треба
+    # Фільтруємо за медіа
     if files_only:
         display_messages = [m for m in all_messages if (len(m) > 8 and m[8])]
     else:
         display_messages = all_messages
+
+    # Фільтруємо за видаленими (тільки для адміна)
+    if deleted_only and is_admin:
+        display_messages = [m for m in display_messages
+                           if len(m) > 11 and m[11] == 1]
 
     total = len(display_messages)
     total_pages = max(1, (total + MESSAGES_PER_PAGE - 1) // MESSAGES_PER_PAGE)
@@ -255,7 +273,13 @@ async def show_chat_page(query, context, page_number: int, files_only: bool = Fa
     page_msgs = display_messages[start: start + MESSAGES_PER_PAGE]
 
     # --- Формуємо текст сторінки ---
-    filter_label = "  |  📂 <b>Тільки файли</b>" if files_only else ""
+    filter_labels = []
+    if files_only:
+        filter_labels.append("📂 Тільки файли")
+    if deleted_only and is_admin:
+        filter_labels.append("🗑 Тільки видалені")
+    filter_label = f"  |  <b>{'  •  '.join(filter_labels)}</b>" if filter_labels else ""
+
     header = (
         f"<b>{title}</b>{filter_label}\n"
         f"<i>Сторінка {page_number + 1} / {total_pages}  •  всього: {total}</i>\n"
@@ -263,7 +287,12 @@ async def show_chat_page(query, context, page_number: int, files_only: bool = Fa
     )
 
     if not page_msgs:
-        body = "❌ <i>Повідомлень не знайдено</i>" if files_only else "❌ <i>Повідомлень ще немає</i>"
+        if deleted_only and is_admin:
+            body = "❌ <i>Видалених повідомлень не знайдено</i>"
+        elif files_only:
+            body = "❌ <i>Повідомлень не знайдено</i>"
+        else:
+            body = "❌ <i>Повідомлень ще немає</i>"
     else:
         cards = []
         for msg in page_msgs:
@@ -281,25 +310,38 @@ async def show_chat_page(query, context, page_number: int, files_only: bool = Fa
             msg_type = msg[5] if len(msg) > 5 else "text"
             media_file_ids.append((fid, msg_type))
 
+    # --- Допоміжна: побудова callback_data з урахуванням усіх фільтрів ---
+    def _page_cb(p):
+        f_val = '1' if files_only else '0'
+        d_val = '1' if deleted_only else '0'
+        return f"chat_page_{p}_{f_val}_{d_val}"
+
     # --- Клавіатура ---
     nav_row = []
     if page_number > 0:
-        cb_prev = f"chat_page_{page_number - 1}_{'1' if files_only else '0'}"
-        nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=cb_prev))
+        nav_row.append(InlineKeyboardButton("⬅️ Назад", callback_data=_page_cb(page_number - 1)))
     nav_row.append(InlineKeyboardButton(f"📄 {page_number + 1}/{total_pages}", callback_data="ignore"))
     if page_number < total_pages - 1:
-        cb_next = f"chat_page_{page_number + 1}_{'1' if files_only else '0'}"
-        nav_row.append(InlineKeyboardButton("Вперед ➡️", callback_data=cb_next))
+        nav_row.append(InlineKeyboardButton("Вперед ➡️", callback_data=_page_cb(page_number + 1)))
 
-    # Кнопка фільтра
-    if files_only:
-        filter_btn = InlineKeyboardButton("📋 Всі повідомлення", callback_data=f"chat_page_0_0")
+    # Кнопки фільтрів
+    filter_row = []
+
+    if files_only or deleted_only:
+        # Якщо хоча б один фільтр активний — кнопка скидання обох
+        filter_row.append(InlineKeyboardButton(
+            "📋 Всі повідомлення", callback_data=_page_cb(0)))
     else:
-        filter_btn = InlineKeyboardButton("📂 Тільки файли/ДЗ", callback_data=f"show_media_gallery_0")
+        # Обидва фільтри неактивні — показуємо кнопки активації
+        filter_row.append(InlineKeyboardButton(
+            "📂 Тільки файли/ДЗ", callback_data=f"show_media_gallery_0"))
+        if is_admin:
+            filter_row.append(InlineKeyboardButton(
+                "🗑 Показати видалені", callback_data=_page_cb(0)))
 
     keyboard = [
         nav_row,
-        [filter_btn],
+        filter_row,
         [InlineKeyboardButton("📥 Завантажити файлом (.txt)", callback_data="export_chat_current")],
         [InlineKeyboardButton("⬅️ Назад до меню", callback_data="back_chat_menu")],
     ]

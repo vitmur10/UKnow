@@ -833,14 +833,16 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=get_main_keyboard(user_role))
         return
 
-    # --- ПАГІНАЦІЯ ІСТОРІЇ: chat_page_<PAGE>_<FILESONLY> ---
+    # --- ПАГІНАЦІЯ ІСТОРІЇ: chat_page_<PAGE>_<FILESONLY>_<DELETEDONLY> ---
     elif data.startswith("chat_page_"):
         parts = data.split("_")
         try:
             page_number = int(parts[2])
             files_only = (parts[3] == "1") if len(parts) > 3 else False
+            deleted_only = (parts[4] == "1") if len(parts) > 4 else False
             from handlers.common import show_chat_page
-            await show_chat_page(query, context, page_number, files_only=files_only)
+            await show_chat_page(query, context, page_number,
+                                 files_only=files_only, deleted_only=deleted_only)
         except (IndexError, ValueError) as e:
             print(f"Помилка пагінації чату: {e}")
         return
@@ -947,32 +949,15 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
 
             if entity_type == "group":
                 group_data = db.get_group_by_id(entity_id)
-                messages = db.get_chat_history(group_id=entity_id)
+                messages = db.get_chat_history(group_id=entity_id, include_deleted=True)
                 title = f"👥 Адмін: Чат групи {group_data[1]}"
 
             elif entity_type in ("student", "teacher"):
                 user_entity = db.get_user(entity_id)
-                conn = sqlite3.connect(db.db_name)
-                cursor = conn.cursor()
-                # Явний перелік колонок — ті самі індекси, що й у db.get_chat_history:
-                # [4]text [5]type [6]timestamp [8]file_id [-2]first_name [-1]last_name
-                # Адмін бачить і видалені повідомлення — з позначкою 🗑
-                sql_query = '''
-                    SELECT m.id, m.from_user_id, m.to_user_id, m.group_id,
-                           CASE WHEN COALESCE(m.is_deleted, 0) = 1
-                                THEN '🗑 [видалено] ' || COALESCE(m.message_text, '')
-                                ELSE m.message_text END AS message_text,
-                           m.message_type, m.timestamp,
-                           m.is_read, m.file_id,
-                           u.first_name, u.last_name
-                    FROM messages m
-                    LEFT JOIN users u ON m.from_user_id = u.user_id
-                    WHERE m.from_user_id = ? OR m.to_user_id = ?
-                    ORDER BY m.timestamp DESC
-                '''
-                cursor.execute(sql_query, (entity_id, entity_id))
-                messages = cursor.fetchall()
-                conn.close()
+                messages = db.get_chat_history(
+                    user1_id=entity_id, user2_id=entity_id,
+                    include_deleted=True
+                )
 
                 icon = "👨‍🎓" if entity_type == "student" else "👨‍🏫"
                 name = f"{user_entity[2]} {user_entity[3]}" if user_entity else f"ID: {entity_id}"
