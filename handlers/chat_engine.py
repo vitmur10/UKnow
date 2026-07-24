@@ -955,8 +955,8 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
             elif entity_type in ("student", "teacher"):
                 user_entity = db.get_user(entity_id)
                 messages = db.get_chat_history(
-                    user1_id=entity_id, user2_id=entity_id,
-                    include_deleted=True
+                    user1_id=entity_id,
+                    admin_all_chats=True, include_deleted=True
                 )
 
                 icon = "👨‍🎓" if entity_type == "student" else "👨‍🏫"

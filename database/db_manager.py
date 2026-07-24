@@ -488,14 +488,18 @@ class Database:
         conn.close()
 
     def get_chat_history(self, user1_id=None, user2_id=None, group_id=None,
-                         date_from=None, date_to=None, include_deleted=False):
+                         date_from=None, date_to=None, include_deleted=False,
+                         admin_all_chats=False):
+        """
+        admin_all_chats=True — адмін бачить ВСІ повідомлення де user є відправником
+        АБО отримувачем (OR замість AND між user1/user2).
+        """
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
 
         result = []
 
         # ВАЖЛИВО: явний перелік колонок замість m.* — гарантує стабільні індекси
-        # незалежно від фізичного порядку колонок у таблиці (стара/нова схема):
         # [0]id [1]from [2]to [3]group [4]text [5]type [6]timestamp [7]is_read
         # [8]file_id [9]first_name [10]last_name [11]is_deleted
         select_cols = '''SELECT m.id, m.from_user_id, m.to_user_id, m.group_id,
@@ -512,6 +516,10 @@ class Database:
             else:
                 query = select_cols + ' WHERE COALESCE(m.is_deleted, 0) = 0 AND m.group_id = ?'
             params = [group_id]
+        elif admin_all_chats:
+            # Адмін: бачить ВСІ повідомлення де user є відправником АБО отримувачем
+            query = select_cols + ''' WHERE (m.from_user_id = ? OR m.to_user_id = ?)'''
+            params = [user1_id, user1_id]
         else:
             if include_deleted:
                 query = select_cols + ''' WHERE ((m.from_user_id = ? AND m.to_user_id = ?)
@@ -533,7 +541,7 @@ class Database:
 
         try:
             cursor.execute(query, params)
-            result = cursor.fetchall()  # Ось де вона отримує значення
+            result = cursor.fetchall()
         except sqlite3.Error as e:
             print(f"Помилка при отриманні історії чату: {e}")
         finally:
