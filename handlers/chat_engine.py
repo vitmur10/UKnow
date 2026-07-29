@@ -80,10 +80,10 @@ async def _unpin_service_message(context: ContextTypes.DEFAULT_TYPE, chat_id: in
 async def start_chat_session(context: ContextTypes.DEFAULT_TYPE, user_id: int,
                              role: str, kind: str, peer_id: int):
     """
-    Активує чат для user_id, надсилає та ЗАКРІПЛЮЄ сервісне повідомлення
+    Активує чат для user_id і надсилає сервісне повідомлення
     "💬 Ви зараз спілкуєтесь з ...".
     """
-    # Прибираємо попереднє закріплення (якщо було)
+    # Прибираємо попереднє закріплення (якщо було у старій версії бота)
     await _unpin_service_message(context, user_id)
     _clear_chat_state(context)
 
@@ -106,21 +106,12 @@ async def start_chat_session(context: ContextTypes.DEFAULT_TYPE, user_id: int,
              "reply (відповісти) з командою /del</i>")
 
     try:
-        service_msg = await context.bot.send_message(
+        await context.bot.send_message(
             chat_id=user_id,
             text=text,
             parse_mode='HTML',
             reply_markup=get_chat_active_keyboard()
         )
-        context.user_data['chat_pinned_msg_id'] = service_msg.message_id
-        try:
-            await context.bot.pin_chat_message(
-                chat_id=user_id,
-                message_id=service_msg.message_id,
-                disable_notification=True
-            )
-        except Exception as pin_err:
-            print(f"[chat] pin error: {pin_err}")
     except Exception as e:
         print(f"[chat] start session error: {e}")
 
