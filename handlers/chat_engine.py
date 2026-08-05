@@ -19,9 +19,11 @@ handlers/chat_engine.py — двигун P2P-чатів (учень ↔ викл
 
 import html
 import io
-import sqlite3
 
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, InputFile
+from telegram import (
+    Update, InlineKeyboardMarkup, InlineKeyboardButton, InputFile,
+    InputMediaAudio, InputMediaDocument, InputMediaPhoto, InputMediaVideo,
+)
 from telegram.ext import ContextTypes
 
 from database.db_manager import db
@@ -44,8 +46,10 @@ _CHAT_STATE_KEYS = [
     'teacher_chat_type', 'teacher_chat_with', 'teacher_chat_with_group',
 ]
 
-# Захист від повторного заголовка для одного альбому: media_group_id -> True
-_album_header_sent: dict = {}
+# Тимчасові буфери альбомів: Telegram надсилає елементи media_group окремими
+# update-ами, тому чекаємо коротке вікно і відправляємо їх одним send_media_group.
+_album_buffers: dict = {}
+_album_jobs: dict = {}
 
 
 def get_active_chat(context: ContextTypes.DEFAULT_TYPE):
@@ -152,6 +156,237 @@ async def chat_end(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = db.get_user(user_id)
     role = user[4] if user else 'student'
     await update.message.reply_text("Головне меню:", reply_markup=get_main_keyboard(role))
+
+
+async def chatid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показує chat_id поточного чату і thread_id, якщо команда викликана в topic."""
+    chat = update.effective_chat
+    msg = update.message
+    text = f"chat_id: <code>{chat.id}</code>\nchat_type: <code>{chat.type}</code>"
+    if msg and msg.message_thread_id:
+        text += f"\nmessage_thread_id: <code>{msg.message_thread_id}</code>"
+    if getattr(chat, "is_forum", None) is not None:
+        text += f"\nis_forum: <code>{chat.is_forum}</code>"
+    await msg.reply_text(text, parse_mode='HTML')
+
+
+async def bind_hub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /bind_hub <teacher_id> у супергрупі-хабі.
+    Зберігає поточний chat.id як users.hub_chat_id для викладача.
+    """
+    chat = update.effective_chat
+    msg = update.message
+    admin = db.get_user(update.effective_user.id)
+
+    if not admin or admin[4] != 'admin':
+        await msg.reply_text("❌ Команда доступна лише адміністраторам.")
+        return
+
+    if chat.type not in ('group', 'supergroup'):
+        await msg.reply_text("❌ Виконайте цю команду всередині супергрупи Teacher Hub.")
+        return
+
+    if not context.args:
+        await msg.reply_text("Формат: <code>/bind_hub teacher_id</code>", parse_mode='HTML')
+        return
+
+    try:
+        teacher_id = int(context.args[0])
+    except ValueError:
+        await msg.reply_text("teacher_id має бути числом.")
+        return
+
+    teacher = db.get_user(teacher_id)
+    if not teacher or teacher[4] != 'teacher':
+        await msg.reply_text("❌ Викладача з таким ID не знайдено.")
+        return
+
+    db.set_hub_chat_id(teacher_id, chat.id)
+
+    teacher_name = html.escape(f"{teacher[2]} {teacher[3]}".strip())
+    forum_note = ""
+    if getattr(chat, "is_forum", None) is False:
+        forum_note = "\n\n⚠️ У цій групі не увімкнені Topics / Теми."
+
+    invite_note = await _send_hub_invite_to_teacher(context, chat.id, teacher_id, teacher_name)
+
+    await msg.reply_text(
+        f"✅ Teacher Hub прив'язано.\n"
+        f"Викладач: <b>{teacher_name}</b>\n"
+        f"teacher_id: <code>{teacher_id}</code>\n"
+        f"hub_chat_id: <code>{chat.id}</code>"
+        f"{invite_note}"
+        f"{forum_note}",
+        parse_mode='HTML'
+    )
+
+
+async def setup_hub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /setup_hub у супергрупі-хабі.
+    Викладач сам прив'язує поточну групу як свій Teacher Hub.
+    """
+    chat = update.effective_chat
+    msg = update.message
+    if not msg:
+        return False
+    user = db.get_user(update.effective_user.id)
+
+    if chat.type not in ('group', 'supergroup'):
+        await msg.reply_text("❌ Виконайте цю команду всередині супергрупи Teacher Hub.")
+        return
+
+    if not user or user[4] != 'teacher':
+        await msg.reply_text("❌ Команда доступна лише викладачу, для якого створено цей хаб.")
+        return
+
+    db.set_hub_chat_id(user[0], chat.id)
+
+    teacher_name = html.escape(f"{user[2]} {user[3]}".strip())
+    forum_note = ""
+    if getattr(chat, "is_forum", None) is False:
+        forum_note = "\n\n⚠️ У цій групі не увімкнені Topics / Теми."
+
+    await msg.reply_text(
+        f"✅ Ваш Teacher Hub прив'язано.\n"
+        f"Викладач: <b>{teacher_name}</b>\n"
+        f"teacher_id: <code>{user[0]}</code>\n"
+        f"hub_chat_id: <code>{chat.id}</code>"
+        f"{forum_note}",
+        parse_mode='HTML'
+    )
+
+
+async def hubs_status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показує адмінам список викладачів і статус прив'язки Teacher Hub."""
+    msg = update.message
+    admin = db.get_user(update.effective_user.id)
+
+    if not admin or admin[4] != 'admin':
+        await msg.reply_text("❌ Команда доступна лише адміністраторам.")
+        return
+
+    teachers = db.get_users_by_role('teacher')
+    if not teachers:
+        await msg.reply_text("Викладачів у базі немає.")
+        return
+
+    lines = ["<b>Teacher Hubs</b>"]
+    for teacher in teachers:
+        teacher_id = teacher[0]
+        name = html.escape(f"{teacher[2] or ''} {teacher[3] or ''}".strip() or "Без імені")
+        hub_chat_id = teacher[10] if len(teacher) > 10 else None
+        status = f"✅ <code>{hub_chat_id}</code>" if hub_chat_id else "❌ не прив'язано"
+        lines.append(f"{name} · <code>{teacher_id}</code> · {status}")
+
+    await msg.reply_text("\n".join(lines), parse_mode='HTML')
+
+
+async def _send_hub_invite_to_teacher(context: ContextTypes.DEFAULT_TYPE, chat_id: int,
+                                      teacher_id: int, teacher_name: str) -> str:
+    """Створює invite link для Teacher Hub і надсилає його викладачу в PM."""
+    try:
+        invite = await context.bot.create_chat_invite_link(
+            chat_id=chat_id,
+            name=f"Teacher Hub invite {teacher_id}",
+            creates_join_request=False
+        )
+    except Exception as e:
+        print(f"[hub] create invite link error: {e}")
+        return "\n\n⚠️ Не вдалося створити invite link. Перевірте право бота запрошувати користувачів."
+
+    try:
+        await context.bot.send_message(
+            chat_id=teacher_id,
+            text=(
+                f"Вас запросили до Teacher Hub.\n\n"
+                f"Викладач: <b>{teacher_name}</b>\n"
+                f"Посилання: {invite.invite_link}"
+            ),
+            parse_mode='HTML'
+        )
+        return "\n\n📨 Invite link надіслано викладачу в PM."
+    except Exception as e:
+        print(f"[hub] send invite to teacher error: {e}")
+        safe_link = html.escape(invite.invite_link)
+        return (
+            "\n\n⚠️ Invite link створено, але не вдалося надіслати викладачу в PM. "
+            "Ймовірно, викладач ще не запускав бота.\n"
+            f"Посилання: {safe_link}"
+        )
+
+
+async def invite_hub_teacher_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /invite_hub_teacher <teacher_id> у супергрупі-хабі.
+    Створює invite link і надсилає його викладачу в PM.
+    """
+    chat = update.effective_chat
+    msg = update.message
+    admin = db.get_user(update.effective_user.id)
+
+    if not admin or admin[4] != 'admin':
+        await msg.reply_text("❌ Команда доступна лише адміністраторам.")
+        return
+
+    if chat.type not in ('group', 'supergroup'):
+        await msg.reply_text("❌ Виконайте цю команду всередині супергрупи Teacher Hub.")
+        return
+
+    if not context.args:
+        await msg.reply_text("Формат: <code>/invite_hub_teacher teacher_id</code>", parse_mode='HTML')
+        return
+
+    try:
+        teacher_id = int(context.args[0])
+    except ValueError:
+        await msg.reply_text("teacher_id має бути числом.")
+        return
+
+    teacher = db.get_user(teacher_id)
+    if not teacher or teacher[4] != 'teacher':
+        await msg.reply_text("❌ Викладача з таким ID не знайдено.")
+        return
+
+    teacher_name = html.escape(f"{teacher[2]} {teacher[3]}".strip())
+    invite_note = await _send_hub_invite_to_teacher(context, chat.id, teacher_id, teacher_name)
+    await msg.reply_text(invite_note.lstrip(), parse_mode='HTML')
+
+
+async def _auto_bind_teacher_hub_if_possible(update: Update) -> bool:
+    """
+    Автоматично прив'язує forum-супергрупу до викладача при першому повідомленні.
+    Не перезаписує вже наявні прив'язки.
+    """
+    chat = update.effective_chat
+    msg = update.message
+    user = db.get_user(update.effective_user.id)
+
+    if not user or user[4] != 'teacher':
+        return False
+    if chat.type not in ('group', 'supergroup'):
+        return False
+    if getattr(chat, "is_forum", None) is not True:
+        return False
+
+    bound_teacher = db.get_teacher_by_hub_chat_id(chat.id)
+    if bound_teacher:
+        return False
+
+    current_hub = db.get_hub_chat_id(user[0])
+    if current_hub and int(current_hub) != int(chat.id):
+        return False
+
+    db.set_hub_chat_id(user[0], chat.id)
+    teacher_name = html.escape(f"{user[2]} {user[3]}".strip())
+    await msg.reply_text(
+        f"✅ Teacher Hub автоматично прив'язано до викладача "
+        f"<b>{teacher_name}</b>.\n"
+        f"hub_chat_id: <code>{chat.id}</code>",
+        parse_mode='HTML'
+    )
+    return True
 
 
 # ==========================================================================
@@ -298,66 +533,6 @@ async def teacher_message_students(update: Update, context: ContextTypes.DEFAULT
     )
 
 
-async def teacher_quick_reply_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Кнопка ↩️ Відповісти у Вхідних викладача (inbox_reply_<student_id>)."""
-    query = update.callback_query
-    await query.answer()
-
-    teacher_id = query.from_user.id
-    student_id = int(query.data.split("_")[2])
-
-    student = db.get_user(student_id)
-    if not student:
-        await query.answer("❌ Учня не знайдено.", show_alert=True)
-        return
-
-    db.mark_messages_read(from_user_id=student_id, to_user_id=teacher_id)
-
-    try:
-        await query.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-
-    await start_chat_session(context, teacher_id, 'teacher', 'individual', student_id)
-
-
-async def quick_reply_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Швидка відповідь по кнопці під повідомленням:
-      quick_reply_teacher_<teacher_id> — відповідь викладачеві
-      quick_reply_group_<group_id>    — відповідь у групу
-    Працює для будь-якої ролі (роль визначаємо з БД).
-    """
-    query = update.callback_query
-    await query.answer()
-
-    user_id = query.from_user.id
-    user = db.get_user(user_id)
-    role = user[4] if user else 'student'
-
-    parts = query.data.split("_")  # ['quick','reply','teacher','12345']
-    reply_type = parts[2]
-    target_id = int(parts[3])
-
-    if reply_type == "teacher":
-        if not db.get_user(target_id):
-            await query.answer("❌ Викладача не знайдено.", show_alert=True)
-            return
-        kind, peer_id = 'individual', target_id
-    else:
-        if not db.get_group_by_id(target_id):
-            await query.answer("❌ Групу не знайдено.", show_alert=True)
-            return
-        kind, peer_id = 'group', target_id
-
-    try:
-        await query.edit_message_reply_markup(reply_markup=None)
-    except Exception:
-        pass
-
-    await start_chat_session(context, user_id, role, kind, peer_id)
-
-
 # ==========================================================================
 # ПЕРЕСИЛАННЯ ПОВІДОМЛЕНЬ (єдиний двигун для тексту і медіа)
 # ==========================================================================
@@ -383,38 +558,205 @@ def _detect_media(msg):
     return 'text', None
 
 
-def _build_reply_markup(sender_role: str, sender_id: int, kind: str, peer_id: int,
-                        sender_first_name: str, group_name: str):
-    """Кнопка '↩️ Відповісти' для отримувача."""
-    if kind == 'group':
-        return InlineKeyboardMarkup([[
-            InlineKeyboardButton(
-                f"↩️ Відповісти в групу {group_name}",
-                callback_data=f"quick_reply_group_{peer_id}"
-            )
-        ]])
-    if sender_role == 'teacher':
-        return InlineKeyboardMarkup([[
-            InlineKeyboardButton(
-                f"↩️ Відповісти {sender_first_name}",
-                callback_data=f"quick_reply_teacher_{sender_id}"
-            )
-        ]])
-    # відправник — учень, отримувач — викладач
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton(
-            f"↩️ Відповісти {sender_first_name}",
-            callback_data=f"inbox_reply_{sender_id}"
+def _build_input_media(msg, caption=None, parse_mode=None):
+    """Створює InputMedia* для елемента альбому або повертає None."""
+    if msg.photo:
+        return InputMediaPhoto(
+            media=msg.photo[-1].file_id,
+            caption=caption,
+            parse_mode=parse_mode
         )
-    ]])
+    if msg.video:
+        return InputMediaVideo(
+            media=msg.video.file_id,
+            caption=caption,
+            parse_mode=parse_mode
+        )
+    if msg.document:
+        return InputMediaDocument(
+            media=msg.document.file_id,
+            caption=caption,
+            parse_mode=parse_mode
+        )
+    if msg.audio:
+        return InputMediaAudio(
+            media=msg.audio.file_id,
+            caption=caption,
+            parse_mode=parse_mode
+        )
+    return None
+
+
+async def _send_old_history_to_topic(context: ContextTypes.DEFAULT_TYPE, hub_chat_id: int,
+                                     topic_id: int, teacher_id: int, student_id: int):
+    """При створенні topic додає .txt зі старою історією переписки."""
+    try:
+        messages = db.get_chat_history(user1_id=student_id, user2_id=teacher_id)
+    except Exception as e:
+        print(f"[hub] history query error: {e}")
+        return
+
+    if not messages:
+        return
+
+    student = db.get_user(student_id)
+    teacher = db.get_user(teacher_id)
+    student_name = f"{student[2]} {student[3]}".strip() if student else str(student_id)
+    teacher_name = f"{teacher[2]} {teacher[3]}".strip() if teacher else str(teacher_id)
+    title = f"Стара історія: {student_name} - {teacher_name}"
+    file_bytes = build_history_txt(messages, title)
+    filename = f"old_history_{student_id}_{teacher_id}.txt"
+
+    try:
+        await context.bot.send_document(
+            chat_id=hub_chat_id,
+            message_thread_id=topic_id,
+            document=InputFile(io.BytesIO(file_bytes), filename=filename),
+            caption="🗄 Стара історія переписок"
+        )
+    except Exception as e:
+        print(f"[hub] history send error: {e}")
+
+
+async def _ensure_student_topic(context: ContextTypes.DEFAULT_TYPE, hub_chat_id: int,
+                                teacher_id: int, student_id: int, student_name: str) -> int | None:
+    """Повертає topic_id учня, створюючи forum topic за потреби."""
+    topic_id = db.get_user_topic_id(student_id)
+    if topic_id:
+        return topic_id
+
+    try:
+        topic = await context.bot.create_forum_topic(
+            chat_id=hub_chat_id,
+            name=f"Учень: {student_name}"[:128]
+        )
+    except Exception as e:
+        print(f"[hub] create topic error: {e}")
+        return None
+
+    topic_id = topic.message_thread_id
+    db.set_user_topic_id(student_id, topic_id)
+    await _send_old_history_to_topic(context, hub_chat_id, topic_id, teacher_id, student_id)
+    return topic_id
+
+
+async def _ensure_group_topic(context: ContextTypes.DEFAULT_TYPE, hub_chat_id: int,
+                              group_id: int, group_name: str) -> int | None:
+    """Повертає topic_id навчальної групи, створюючи forum topic за потреби."""
+    topic_id = db.get_group_topic_id(group_id)
+    if topic_id:
+        return topic_id
+
+    try:
+        topic = await context.bot.create_forum_topic(
+            chat_id=hub_chat_id,
+            name=f"Група: {group_name}"[:128]
+        )
+    except Exception as e:
+        print(f"[hub] create group topic error: {e}")
+        return None
+
+    topic_id = topic.message_thread_id
+    db.set_group_topic_id(group_id, topic_id)
+
+    messages = db.get_chat_history(group_id=group_id)
+    if messages:
+        file_bytes = build_history_txt(messages, f"Стара історія групи: {group_name}")
+        try:
+            await context.bot.send_document(
+                chat_id=hub_chat_id,
+                message_thread_id=topic_id,
+                document=InputFile(io.BytesIO(file_bytes), filename=f"old_group_history_{group_id}.txt"),
+                caption="🗄 Стара історія переписок"
+            )
+        except Exception as e:
+            print(f"[hub] group history send error: {e}")
+
+    return topic_id
+
+
+async def _copy_to_thread(context: ContextTypes.DEFAULT_TYPE, msg, hub_chat_id: int,
+                          topic_id: int, caption=None, parse_mode=None):
+    return await context.bot.copy_message(
+        chat_id=hub_chat_id,
+        from_chat_id=msg.chat.id,
+        message_id=msg.message_id,
+        message_thread_id=topic_id,
+        caption=caption,
+        parse_mode=parse_mode
+    )
+
+
+async def _copy_from_hub_to_student(context: ContextTypes.DEFAULT_TYPE, msg, student_id: int,
+                                    caption=None, parse_mode=None):
+    return await context.bot.copy_message(
+        chat_id=student_id,
+        from_chat_id=msg.chat.id,
+        message_id=msg.message_id,
+        caption=caption,
+        parse_mode=parse_mode
+    )
+
+
+def _album_key(direction: str, chat_id: int, media_group_id: str):
+    return f"{direction}:{chat_id}:{media_group_id}"
+
+
+async def _flush_student_album(context: ContextTypes.DEFAULT_TYPE):
+    data = context.job.data
+    key = data["key"]
+    items = _album_buffers.pop(key, [])
+    _album_jobs.pop(key, None)
+    if not items:
+        return
+
+    first = items[0]
+    header = first["header"]
+    media = []
+    for i, item in enumerate(items):
+        msg = item["message"]
+        text = (msg.caption or "").strip()
+        caption = header + (f"\n\n{html.escape(text)}" if text else "") if i == 0 else None
+        input_media = _build_input_media(msg, caption=caption, parse_mode='HTML' if caption else None)
+        if not input_media:
+            continue
+        media.append(input_media)
+
+    try:
+        sent = await context.bot.send_media_group(
+            chat_id=first["hub_chat_id"],
+            message_thread_id=first["topic_id"],
+            media=media
+        )
+        for item, sent_msg in zip(items, sent):
+            db.save_delivery(item["message_db_id"], first["hub_chat_id"], sent_msg.message_id)
+    except Exception as e:
+        print(f"[hub] send media_group error, fallback copy: {e}")
+        for item in items:
+            try:
+                copied = await _copy_to_thread(
+                    context, item["message"], item["hub_chat_id"], item["topic_id"]
+                )
+                db.save_delivery(item["message_db_id"], item["hub_chat_id"], copied.message_id)
+            except Exception as copy_err:
+                print(f"[hub] album fallback copy error: {copy_err}")
+
+
+def _queue_student_album(context: ContextTypes.DEFAULT_TYPE, key: str, item: dict):
+    _album_buffers.setdefault(key, []).append(item)
+    if key not in _album_jobs:
+        _album_jobs[key] = context.job_queue.run_once(
+            _flush_student_album,
+            when=1.2,
+            data={"key": key},
+            name=f"flush_album_{key}"
+        )
 
 
 async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """
-    Миттєво пересилає повідомлення (текст/медіа/альбом/стікер) отримувачам
-    активного чату. Повертає True, якщо повідомлення оброблено.
-
-    Без буферизації і без відбивок відправнику — як звичайний месенджер.
+    Маршрутизує PM учня у Forum Topic викладацького Teacher Hub.
+    Старий P2P-маршрут до PM викладача більше не використовується.
     """
     state = get_active_chat(context)
     if not state:
@@ -426,21 +768,15 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not sender:
         return False
 
-    sender_role = state['role']
     kind = state['kind']
     peer_id = state['peer_id']
     sender_full_name = f"{sender[2]} {sender[3]}"
     safe_sender = html.escape(sender_full_name)
 
-    # --- Отримувачі ---
-    recipients = set()
     group_id_for_db = None
-    to_user_id_for_db = None
-    group_name = ""
-
     if kind == 'individual':
-        to_user_id_for_db = peer_id
-        recipients.add(peer_id)
+        teacher_id = peer_id
+        topic_id = None
     else:
         group_info = db.get_group_by_id(peer_id)
         if not group_info:
@@ -448,16 +784,32 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await end_chat_session(context, sender_id)
             return True
         group_id_for_db = peer_id
+        teacher_id = group_info[2]
         group_name = group_info[1]
-        for m in db.get_group_members(peer_id):
-            recipients.add(m[0])
-        if group_info[2]:
-            recipients.add(group_info[2])  # викладач групи
 
-    recipients.discard(sender_id)
+    hub_chat_id = db.get_hub_chat_id(teacher_id)
+    if not hub_chat_id:
+        await msg.reply_text("❌ Для цього викладача ще не налаштовано Teacher Hub.")
+        return True
 
-    if not recipients:
-        await msg.reply_text("❌ Не вдалося визначити отримувача.")
+    if kind == 'individual':
+        topic_id = await _ensure_student_topic(
+            context=context,
+            hub_chat_id=hub_chat_id,
+            teacher_id=teacher_id,
+            student_id=sender_id,
+            student_name=sender_full_name.strip() or str(sender_id)
+        )
+    else:
+        topic_id = await _ensure_group_topic(
+            context=context,
+            hub_chat_id=hub_chat_id,
+            group_id=group_id_for_db,
+            group_name=group_name
+        )
+
+    if not topic_id:
+        await msg.reply_text("❌ Не вдалося створити гілку у Teacher Hub.")
         return True
 
     # --- Вміст ---
@@ -477,7 +829,7 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         msg_db_id = db.save_message(
             from_user_id=sender_id,
-            to_user_id=to_user_id_for_db,
+            to_user_id=teacher_id if kind == 'individual' else None,
             group_id=group_id_for_db,
             message_text=content_text,
             message_type=media_type,
@@ -490,103 +842,212 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     # --- Заголовок ---
     now_str = now_kyiv_str()
-    if kind == 'group':
-        header = f"👥 <b>{html.escape(group_name)}</b> · <b>{safe_sender}</b>  <i>{now_str}</i>"
-    else:
-        header = f"📩 <b>{safe_sender}</b>  <i>{now_str}</i>"
-
-    # Для альбомів: заголовок і кнопка — лише з першим файлом альбому
-    mgid = msg.media_group_id
-    is_album_tail = False
-    if mgid:
-        if mgid in _album_header_sent:
-            is_album_tail = True
-        else:
-            _album_header_sent[mgid] = True
-            if len(_album_header_sent) > 300:  # проста профілактика росту
-                for old_key in list(_album_header_sent.keys())[:150]:
-                    _album_header_sent.pop(old_key, None)
-
-    reply_markup = _build_reply_markup(
-        sender_role, sender_id, kind, peer_id,
-        sender_full_name.split()[0], group_name
-    )
+    header = f"📩 <b>{safe_sender}</b>  <i>{now_str}</i>"
 
     lesson_link = is_lesson_link(content_text)
-    delivered = 0
 
-    for r_id in recipients:
+    try:
+        if msg.media_group_id and media_type in ('photo', 'video', 'document', 'audio'):
+            key = _album_key("student_to_hub", sender_id, msg.media_group_id)
+            _queue_student_album(context, key, {
+                "message": msg,
+                "message_db_id": msg_db_id,
+                "hub_chat_id": hub_chat_id,
+                "topic_id": topic_id,
+                "header": header,
+            })
+            return True
+
+        if media_type == 'text':
+            sent_msg = await context.bot.send_message(
+                chat_id=hub_chat_id,
+                message_thread_id=topic_id,
+                text=f"{header}\n\n{html.escape(content_text)}",
+                parse_mode='HTML'
+            )
+            db.save_delivery(msg_db_id, hub_chat_id, sent_msg.message_id)
+            if lesson_link:
+                try:
+                    await context.bot.pin_chat_message(
+                        chat_id=hub_chat_id, message_id=sent_msg.message_id,
+                        disable_notification=True)
+                except Exception as pin_err:
+                    print(f"[hub] pin lesson link error: {pin_err}")
+
+        elif media_type in ('photo', 'video', 'document', 'audio', 'animation'):
+            caption = header + (f"\n\n{html.escape(content_text)}" if content_text else "")
+            if len(caption) > 1000:
+                caption = caption[:997] + "..."
+            copied = await _copy_to_thread(
+                context, msg, hub_chat_id, topic_id, caption=caption, parse_mode='HTML'
+            )
+            db.save_delivery(msg_db_id, hub_chat_id, copied.message_id)
+
+        elif media_type == 'sticker':
+            sticker_msg = await context.bot.send_sticker(
+                chat_id=hub_chat_id,
+                message_thread_id=topic_id,
+                sticker=msg.sticker.file_id)
+            db.save_delivery(msg_db_id, hub_chat_id, sticker_msg.message_id)
+
+        else:  # voice, video_note — не підтримують caption
+            copied = await _copy_to_thread(context, msg, hub_chat_id, topic_id)
+            db.save_delivery(msg_db_id, hub_chat_id, copied.message_id)
+
+    except Exception as e:
+        print(f"[hub] delivery error: {e}")
+        await msg.reply_text("❌ Не вдалося доставити повідомлення у Teacher Hub.")
+
+    return True
+
+
+async def _flush_teacher_album(context: ContextTypes.DEFAULT_TYPE):
+    data = context.job.data
+    key = data["key"]
+    items = _album_buffers.pop(key, [])
+    _album_jobs.pop(key, None)
+    if not items:
+        return
+
+    first = items[0]
+    media = []
+    for i, item in enumerate(items):
+        msg = item["message"]
+        text = (msg.caption or "").strip()
+        caption = item["header"] + (f"\n\n{html.escape(text)}" if text else "") if i == 0 else None
+        input_media = _build_input_media(msg, caption=caption, parse_mode='HTML' if caption else None)
+        if input_media:
+            media.append(input_media)
+
+    for recipient_id in first["recipient_ids"]:
         try:
-            if media_type == 'text':
-                sent_msg = await context.bot.send_message(
-                    chat_id=r_id,
-                    text=f"{header}\n\n{html.escape(content_text)}",
-                    parse_mode='HTML',
-                    reply_markup=reply_markup
-                )
-                db.save_delivery(msg_db_id, r_id, sent_msg.message_id)
-                if lesson_link:
-                    try:
-                        await context.bot.pin_chat_message(
-                            chat_id=r_id, message_id=sent_msg.message_id,
-                            disable_notification=True)
-                    except Exception as pin_err:
-                        print(f"[relay] pin lesson link error: {pin_err}")
-
-            elif media_type in ('photo', 'video', 'document', 'audio', 'animation'):
-                if is_album_tail:
-                    # Хвіст альбому — копіюємо з оригінальним підписом, без заголовка
-                    copied = await context.bot.copy_message(
-                        chat_id=r_id,
-                        from_chat_id=msg.chat.id,
-                        message_id=msg.message_id
-                    )
-                    db.save_delivery(msg_db_id, r_id, copied.message_id)
-                else:
-                    caption = header + (f"\n\n{html.escape(content_text)}" if content_text else "")
-                    if len(caption) > 1000:
-                        caption = caption[:997] + "…"
-                    copied = await context.bot.copy_message(
-                        chat_id=r_id,
-                        from_chat_id=msg.chat.id,
-                        message_id=msg.message_id,
-                        caption=caption,
-                        parse_mode='HTML',
-                        reply_markup=reply_markup
-                    )
-                    db.save_delivery(msg_db_id, r_id, copied.message_id)
-
-            elif media_type == 'sticker':
-                header_msg = await context.bot.send_message(
-                    chat_id=r_id, text=header, parse_mode='HTML',
-                    reply_markup=reply_markup)
-                sticker_msg = await context.bot.send_sticker(chat_id=r_id, sticker=msg.sticker.file_id)
-                db.save_delivery(msg_db_id, r_id, header_msg.message_id)
-                db.save_delivery(msg_db_id, r_id, sticker_msg.message_id)
-
-            else:  # voice, video_note — не підтримують caption
-                header_msg = await context.bot.send_message(
-                    chat_id=r_id, text=header, parse_mode='HTML',
-                    reply_markup=reply_markup)
-                copied = await context.bot.copy_message(
-                    chat_id=r_id,
-                    from_chat_id=msg.chat.id,
-                    message_id=msg.message_id
-                )
-                db.save_delivery(msg_db_id, r_id, header_msg.message_id)
-                db.save_delivery(msg_db_id, r_id, copied.message_id)
-
-            delivered += 1
+            sent = await context.bot.send_media_group(
+                chat_id=recipient_id,
+                media=media
+            )
+            for item, sent_msg in zip(items, sent):
+                db.save_delivery(item["message_db_id"], recipient_id, sent_msg.message_id)
         except Exception as e:
-            print(f"[relay] delivery error to {r_id}: {e}")
+            print(f"[hub] teacher album send error, fallback copy: {e}")
+            for item in items:
+                try:
+                    copied = await _copy_from_hub_to_student(
+                        context, item["message"], recipient_id
+                    )
+                    db.save_delivery(item["message_db_id"], recipient_id, copied.message_id)
+                except Exception as copy_err:
+                    print(f"[hub] teacher album fallback copy error: {copy_err}")
 
-    # Повідомляємо відправника ЛИШЕ у разі повної невдачі
-    if delivered == 0:
-        try:
-            await msg.reply_text(
-                "❌ Не вдалося доставити повідомлення. Можливо, отримувач заблокував бота.")
-        except Exception:
-            pass
+
+def _queue_teacher_album(context: ContextTypes.DEFAULT_TYPE, key: str, item: dict):
+    _album_buffers.setdefault(key, []).append(item)
+    if key not in _album_jobs:
+        _album_jobs[key] = context.job_queue.run_once(
+            _flush_teacher_album,
+            when=1.2,
+            data={"key": key},
+            name=f"flush_album_{key}"
+        )
+
+
+async def relay_teacher_hub_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Копіює повідомлення з forum topic Teacher Hub у PM учня.
+    Повертає True, якщо це був валідний Teacher Hub topic.
+    """
+    msg = update.message
+    if not msg or not msg.message_thread_id:
+        await _auto_bind_teacher_hub_if_possible(update)
+        return False
+    if update.effective_user and update.effective_user.is_bot:
+        return True
+
+    await _auto_bind_teacher_hub_if_possible(update)
+
+    hub_chat_id = msg.chat.id
+    topic_id = msg.message_thread_id
+    student = db.get_student_by_topic_id(topic_id, hub_chat_id=hub_chat_id)
+    group = None
+    if student:
+        recipient_ids = [student[0]]
+        to_user_id_for_db = student[0]
+        group_id_for_db = None
+    else:
+        group = db.get_group_by_topic_id(topic_id, hub_chat_id=hub_chat_id)
+        if not group:
+            return False
+        recipient_ids = [member[0] for member in db.get_group_members(group[0])]
+        to_user_id_for_db = None
+        group_id_for_db = group[0]
+        if not recipient_ids:
+            return True
+
+    teacher = db.get_teacher_by_hub_chat_id(hub_chat_id)
+    from_user_id = update.effective_user.id if update.effective_user else (teacher[0] if teacher else None)
+    teacher_name = update.effective_user.full_name if update.effective_user else "Викладач"
+    header = f"📩 <b>{html.escape(teacher_name)}</b>  <i>{now_kyiv_str()}</i>"
+
+    media_type, file_id = _detect_media(msg)
+    content_text = (msg.text or msg.caption or "").strip()
+    if media_type == 'sticker':
+        emoji = msg.sticker.emoji or ""
+        set_name = msg.sticker.set_name or ""
+        content_text = f"🎭 [Стікер {emoji}] {set_name}".strip()
+    if media_type == 'text' and not content_text:
+        return True
+
+    msg_db_id = None
+    try:
+        msg_db_id = db.save_message(
+            from_user_id=from_user_id,
+            to_user_id=to_user_id_for_db,
+            group_id=group_id_for_db,
+            message_text=content_text,
+            message_type=media_type,
+            file_id=file_id
+        )
+        db.save_delivery(msg_db_id, hub_chat_id, msg.message_id)
+    except Exception as e:
+        print(f"[hub] teacher reply db save error: {e}")
+
+    try:
+        if msg.media_group_id and media_type in ('photo', 'video', 'document', 'audio'):
+            key = _album_key("hub_to_student", hub_chat_id, msg.media_group_id)
+            _queue_teacher_album(context, key, {
+                "message": msg,
+                "message_db_id": msg_db_id,
+                "recipient_ids": recipient_ids,
+                "header": header,
+            })
+            return True
+
+        if media_type == 'text':
+            for recipient_id in recipient_ids:
+                sent_msg = await context.bot.send_message(
+                    chat_id=recipient_id,
+                    text=f"{header}\n\n{html.escape(content_text)}",
+                    parse_mode='HTML'
+                )
+                db.save_delivery(msg_db_id, recipient_id, sent_msg.message_id)
+        elif media_type in ('photo', 'video', 'document', 'audio', 'animation'):
+            caption = header + (f"\n\n{html.escape(content_text)}" if content_text else "")
+            if len(caption) > 1000:
+                caption = caption[:997] + "..."
+            for recipient_id in recipient_ids:
+                copied = await _copy_from_hub_to_student(
+                    context, msg, recipient_id, caption=caption, parse_mode='HTML'
+                )
+                db.save_delivery(msg_db_id, recipient_id, copied.message_id)
+        elif media_type == 'sticker':
+            for recipient_id in recipient_ids:
+                sticker_msg = await context.bot.send_sticker(chat_id=recipient_id, sticker=msg.sticker.file_id)
+                db.save_delivery(msg_db_id, recipient_id, sticker_msg.message_id)
+        else:
+            for recipient_id in recipient_ids:
+                copied = await _copy_from_hub_to_student(context, msg, recipient_id)
+                db.save_delivery(msg_db_id, recipient_id, copied.message_id)
+    except Exception as e:
+        print(f"[hub] teacher reply delivery error: {e}")
 
     return True
 

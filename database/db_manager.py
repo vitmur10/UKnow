@@ -19,6 +19,7 @@ class Database:
             phone TEXT,
             language TEXT,
             birthdate TEXT,
+            hub_chat_id INTEGER,
             registration_date DATETIME DEFAULT CURRENT_TIMESTAMP,
             is_active BOOLEAN DEFAULT 1
         )''')
@@ -27,11 +28,26 @@ class Database:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             teacher_id INTEGER,
             student_id INTEGER,
+            topic_id INTEGER,
             assigned_date DATETIME DEFAULT CURRENT_TIMESTAMP,
             is_active BOOLEAN DEFAULT 1,
             FOREIGN KEY (teacher_id) REFERENCES users (user_id),
             FOREIGN KEY (student_id) REFERENCES users (user_id)
         )''')
+        # Teacher Hubs / Forum Topics migrations.
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN hub_chat_id INTEGER")
+        except Exception:
+            pass
+        try:
+            cursor.execute("ALTER TABLE assignments ADD COLUMN topic_id INTEGER")
+        except Exception:
+            pass
+        cursor.execute('''CREATE INDEX IF NOT EXISTS idx_users_hub_chat_id
+                          ON users (hub_chat_id)''')
+        cursor.execute('''CREATE INDEX IF NOT EXISTS idx_assignments_topic_id
+                          ON assignments (topic_id)
+                          WHERE topic_id IS NOT NULL AND is_active = 1''')
 
         cursor.execute('''CREATE TABLE IF NOT EXISTS messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -96,11 +112,19 @@ class Database:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT,
             teacher_id INTEGER,
+            topic_id INTEGER,
             group_type TEXT DEFAULT 'pair',
             created_date DATETIME DEFAULT CURRENT_TIMESTAMP,
             is_active BOOLEAN DEFAULT 1,
             FOREIGN KEY (teacher_id) REFERENCES users (user_id)
         )''')
+        try:
+            cursor.execute("ALTER TABLE groups ADD COLUMN topic_id INTEGER")
+        except Exception:
+            pass
+        cursor.execute('''CREATE INDEX IF NOT EXISTS idx_groups_topic_id
+                          ON groups (topic_id)
+                          WHERE topic_id IS NOT NULL AND is_active = 1''')
 
         cursor.execute('''CREATE TABLE IF NOT EXISTS group_members (
             group_id INTEGER,
@@ -200,10 +224,17 @@ class Database:
     def add_user(self, user_id, username, first_name, last_name, role='student'):
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
-        cursor.execute('''INSERT OR REPLACE INTO users 
-                         (user_id, username, first_name, last_name, role) 
-                         VALUES (?, ?, ?, ?, ?)''',
-                       (user_id, username, first_name, last_name, role))
+        cursor.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,))
+        if cursor.fetchone():
+            cursor.execute('''UPDATE users
+                              SET username = ?, first_name = ?, last_name = ?, role = ?, is_active = 1
+                              WHERE user_id = ?''',
+                           (username, first_name, last_name, role, user_id))
+        else:
+            cursor.execute('''INSERT INTO users
+                             (user_id, username, first_name, last_name, role)
+                             VALUES (?, ?, ?, ?, ?)''',
+                           (user_id, username, first_name, last_name, role))
         conn.commit()
         conn.close()
 
@@ -258,6 +289,115 @@ class Database:
                          VALUES (?, ?)''', (teacher_id, student_id))
         conn.commit()
         conn.close()
+
+    def get_hub_chat_id(self, teacher_id):
+        """Повертає Telegram chat_id супергрупи-хабу викладача або None."""
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute('''SELECT hub_chat_id FROM users
+                          WHERE user_id = ? AND role = 'teacher' AND is_active = 1''',
+                       (teacher_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row and row[0] is not None else None
+
+    def set_hub_chat_id(self, teacher_id, chat_id):
+        """Зберігає Telegram chat_id супергрупи-хабу викладача."""
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET hub_chat_id = ? WHERE user_id = ?",
+                       (chat_id, teacher_id))
+        conn.commit()
+        conn.close()
+
+    def get_user_topic_id(self, student_id):
+        """Повертає forum topic_id активної індивідуальної прив'язки учня."""
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute('''SELECT topic_id FROM assignments
+                          WHERE student_id = ? AND is_active = 1
+                          ORDER BY assigned_date DESC, id DESC
+                          LIMIT 1''', (student_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row and row[0] is not None else None
+
+    def set_user_topic_id(self, student_id, topic_id):
+        """Зберігає forum topic_id для активної індивідуальної прив'язки учня."""
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute('''UPDATE assignments SET topic_id = ?
+                          WHERE student_id = ? AND is_active = 1''',
+                       (topic_id, student_id))
+        conn.commit()
+        conn.close()
+
+    def get_student_by_topic_id(self, topic_id, hub_chat_id=None):
+        """
+        Повертає рядок users для учня за topic_id.
+        Якщо передано hub_chat_id, додатково перевіряє, що topic належить
+        викладачу саме цього Teacher Hub.
+        """
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        query = '''SELECT s.* FROM assignments a
+                   JOIN users s ON s.user_id = a.student_id
+                   JOIN users t ON t.user_id = a.teacher_id
+                   WHERE a.topic_id = ? AND a.is_active = 1 AND s.is_active = 1'''
+        params = [topic_id]
+        if hub_chat_id is not None:
+            query += " AND t.hub_chat_id = ?"
+            params.append(hub_chat_id)
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        conn.close()
+        return row
+
+    def get_teacher_by_hub_chat_id(self, hub_chat_id):
+        """Повертає викладача за chat_id його супергрупи-хабу."""
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute('''SELECT * FROM users
+                          WHERE hub_chat_id = ? AND role = 'teacher' AND is_active = 1''',
+                       (hub_chat_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row
+
+    def get_group_topic_id(self, group_id):
+        """Повертає forum topic_id навчальної групи або None."""
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute('''SELECT topic_id FROM groups
+                          WHERE id = ? AND is_active = 1''', (group_id,))
+        row = cursor.fetchone()
+        conn.close()
+        return row[0] if row and row[0] is not None else None
+
+    def set_group_topic_id(self, group_id, topic_id):
+        """Зберігає forum topic_id для навчальної групи."""
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE groups SET topic_id = ? WHERE id = ?",
+                       (topic_id, group_id))
+        conn.commit()
+        conn.close()
+
+    def get_group_by_topic_id(self, topic_id, hub_chat_id=None):
+        """Повертає групу за topic_id, опційно перевіряючи Teacher Hub викладача."""
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        query = '''SELECT g.* FROM groups g
+                   JOIN users t ON t.user_id = g.teacher_id
+                   WHERE g.topic_id = ? AND g.is_active = 1'''
+        params = [topic_id]
+        if hub_chat_id is not None:
+            query += " AND t.hub_chat_id = ?"
+            params.append(hub_chat_id)
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        conn.close()
+        return row
 
     # def get_teacher_students(self, teacher_id):
     # conn = sqlite3.connect(self.db_name)

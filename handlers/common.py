@@ -6,7 +6,7 @@ import html
 from database.db_manager import db
 from utils.keyboards import get_main_keyboard, get_calendar_keyboard
 from utils.helpers import format_lesson_time
-from config.settings import IMAGE_WARNING_FILE_ID, logger, KYIV_TZ
+from config.settings import KYIV_TZ
 
 
 # ПРИМІТКА: імпорти show_teacher_chat_history та show_student_chat_history
@@ -131,16 +131,7 @@ async def fallback_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         "Для швидкого зв'язку з адміністратором натисніть на **💬 Написати адміністратору**."
     )
 
-    try:
-        await context.bot.send_photo(
-            chat_id=update.effective_chat.id,
-            photo=IMAGE_WARNING_FILE_ID,
-            caption=response_text,
-            parse_mode='Markdown'
-        )
-    except Exception as e:
-        logger.error(f"Помилка при відправці фото: {e}")
-        await update.message.reply_text(response_text, parse_mode='Markdown')
+    await update.message.reply_text(response_text, parse_mode='Markdown')
 
 
 async def handle_unknown_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -153,21 +144,11 @@ async def handle_unknown_text(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     chat_id = update.message.chat_id
 
-    # Надсилаємо фото, використовуючи збережений file_id, та додаємо підпис
-    try:
-        await context.bot.send_photo(
-            chat_id=chat_id,
-            photo=IMAGE_WARNING_FILE_ID,  # Використовуємо ваш file_id
-            caption=warning_message,
-            parse_mode=ParseMode.MARKDOWN  # Використовуємо ParseMode.MARKDOWN для жирного шрифту
-        )
-    except Exception as e:
-        logger.error(f"Помилка надсилання фото-попередження: {e}")
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="⚠️ Невідоме повідомлення! Будь ласка, використовуйте кнопки-підказки.",
-            parse_mode=ParseMode.MARKDOWN
-        )
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=warning_message,
+        parse_mode=ParseMode.MARKDOWN
+    )
 
 
 async def get_file_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
