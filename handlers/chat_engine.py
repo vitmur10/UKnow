@@ -711,13 +711,12 @@ async def _flush_student_album(context: ContextTypes.DEFAULT_TYPE):
         return
 
     first = items[0]
-    header = first["header"]
     media = []
     for i, item in enumerate(items):
         msg = item["message"]
         text = (msg.caption or "").strip()
-        caption = header + (f"\n\n{html.escape(text)}" if text else "") if i == 0 else None
-        input_media = _build_input_media(msg, caption=caption, parse_mode='HTML' if caption else None)
+        caption = text if i == 0 and text else None
+        input_media = _build_input_media(msg, caption=caption)
         if not input_media:
             continue
         media.append(input_media)
@@ -840,10 +839,6 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         print(f"[relay] db save error: {e}")
 
-    # --- Заголовок ---
-    now_str = now_kyiv_str()
-    header = f"📩 <b>{safe_sender}</b>  <i>{now_str}</i>"
-
     lesson_link = is_lesson_link(content_text)
 
     try:
@@ -854,7 +849,6 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "message_db_id": msg_db_id,
                 "hub_chat_id": hub_chat_id,
                 "topic_id": topic_id,
-                "header": header,
             })
             return True
 
@@ -862,8 +856,7 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
             sent_msg = await context.bot.send_message(
                 chat_id=hub_chat_id,
                 message_thread_id=topic_id,
-                text=f"{header}\n\n{html.escape(content_text)}",
-                parse_mode='HTML'
+                text=content_text
             )
             db.save_delivery(msg_db_id, hub_chat_id, sent_msg.message_id)
             if lesson_link:
@@ -875,12 +868,7 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     print(f"[hub] pin lesson link error: {pin_err}")
 
         elif media_type in ('photo', 'video', 'document', 'audio', 'animation'):
-            caption = header + (f"\n\n{html.escape(content_text)}" if content_text else "")
-            if len(caption) > 1000:
-                caption = caption[:997] + "..."
-            copied = await _copy_to_thread(
-                context, msg, hub_chat_id, topic_id, caption=caption, parse_mode='HTML'
-            )
+            copied = await _copy_to_thread(context, msg, hub_chat_id, topic_id)
             db.save_delivery(msg_db_id, hub_chat_id, copied.message_id)
 
         elif media_type == 'sticker':
@@ -914,8 +902,8 @@ async def _flush_teacher_album(context: ContextTypes.DEFAULT_TYPE):
     for i, item in enumerate(items):
         msg = item["message"]
         text = (msg.caption or "").strip()
-        caption = item["header"] + (f"\n\n{html.escape(text)}" if text else "") if i == 0 else None
-        input_media = _build_input_media(msg, caption=caption, parse_mode='HTML' if caption else None)
+        caption = text if i == 0 and text else None
+        input_media = _build_input_media(msg, caption=caption)
         if input_media:
             media.append(input_media)
 
@@ -984,9 +972,6 @@ async def relay_teacher_hub_message(update: Update, context: ContextTypes.DEFAUL
 
     teacher = db.get_teacher_by_hub_chat_id(hub_chat_id)
     from_user_id = update.effective_user.id if update.effective_user else (teacher[0] if teacher else None)
-    teacher_name = update.effective_user.full_name if update.effective_user else "Викладач"
-    header = f"📩 <b>{html.escape(teacher_name)}</b>  <i>{now_kyiv_str()}</i>"
-
     media_type, file_id = _detect_media(msg)
     content_text = (msg.text or msg.caption or "").strip()
     if media_type == 'sticker':
@@ -1017,7 +1002,6 @@ async def relay_teacher_hub_message(update: Update, context: ContextTypes.DEFAUL
                 "message": msg,
                 "message_db_id": msg_db_id,
                 "recipient_ids": recipient_ids,
-                "header": header,
             })
             return True
 
@@ -1025,17 +1009,13 @@ async def relay_teacher_hub_message(update: Update, context: ContextTypes.DEFAUL
             for recipient_id in recipient_ids:
                 sent_msg = await context.bot.send_message(
                     chat_id=recipient_id,
-                    text=f"{header}\n\n{html.escape(content_text)}",
-                    parse_mode='HTML'
+                    text=content_text
                 )
                 db.save_delivery(msg_db_id, recipient_id, sent_msg.message_id)
         elif media_type in ('photo', 'video', 'document', 'audio', 'animation'):
-            caption = header + (f"\n\n{html.escape(content_text)}" if content_text else "")
-            if len(caption) > 1000:
-                caption = caption[:997] + "..."
             for recipient_id in recipient_ids:
                 copied = await _copy_from_hub_to_student(
-                    context, msg, recipient_id, caption=caption, parse_mode='HTML'
+                    context, msg, recipient_id
                 )
                 db.save_delivery(msg_db_id, recipient_id, copied.message_id)
         elif media_type == 'sticker':
