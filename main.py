@@ -60,10 +60,8 @@ from handlers.admin import (
 # Двигун чатів (БЕЗ ConversationHandler — стан у context.user_data)
 from handlers.chat_engine import (
     chat_engine_callbacks, student_message_start, teacher_message_students,
-    chat_end, menu_button_router, relay_chat_message, get_active_chat,
-    delete_for_everyone, relay_teacher_hub_message, chatid_command,
-    bind_hub_command, setup_hub_command, hubs_status_command,
-    invite_hub_teacher_command
+    quick_reply_start, teacher_quick_reply_start, chat_end,
+    menu_button_router, relay_chat_message, get_active_chat, delete_for_everyone
 )
 
 # ==========================================
@@ -99,9 +97,6 @@ async def global_message_handler(update: Update, context: ContextTypes.DEFAULT_T
     5. Невідомий текст.
     """
     user_id = update.effective_user.id
-    if update.effective_chat.type != 'private':
-        return
-
     user = db.get_user(user_id)
 
     if not user:
@@ -149,9 +144,6 @@ async def global_media_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     (кожен файл альбому окремо, без буферизації — нічого не губиться).
     """
     user_id = update.effective_user.id
-    if update.effective_chat.type != 'private':
-        return
-
     user = db.get_user(user_id)
     if not user:
         return
@@ -313,11 +305,6 @@ def main():
     # ==========================================
     # Видалення власного повідомлення "для всіх" (reply + /del)
     application.add_handler(CommandHandler('del', delete_for_everyone))
-    application.add_handler(CommandHandler('chatid', chatid_command))
-    application.add_handler(CommandHandler('bind_hub', bind_hub_command))
-    application.add_handler(CommandHandler('setup_hub', setup_hub_command))
-    application.add_handler(CommandHandler('hubs_status', hubs_status_command))
-    application.add_handler(CommandHandler('invite_hub_teacher', invite_hub_teacher_command))
 
     application.add_handler(CommandHandler('admin', admin_command))
     application.add_handler(CommandHandler('manager', manager_command))
@@ -338,6 +325,10 @@ def main():
     # 6. ІНЛАЙН РОУТЕРИ
     # ВАЖЛИВО: порядок має значення — специфічні патерни ВИЩЕ загальних!
     # ==========================================
+    # Швидкі відповіді (старт чату по кнопці під повідомленням)
+    application.add_handler(CallbackQueryHandler(teacher_quick_reply_start, pattern=r'^inbox_reply_\d+$'))
+    application.add_handler(CallbackQueryHandler(quick_reply_start, pattern=r'^quick_reply_(teacher|group)_\d+$'))
+
     application.add_handler(CallbackQueryHandler(show_media_gallery, pattern=r'^show_media_gallery_\d+$'))
     application.add_handler(CallbackQueryHandler(chat_engine_callbacks, pattern=r'^chat_page_'))
     application.add_handler(CallbackQueryHandler(chat_engine_callbacks, pattern=r'^export_chat_current$'))
@@ -363,10 +354,6 @@ def main():
     # 7. ГЛОБАЛЬНІ ОБРОБНИКИ ТЕКСТУ ТА МЕДІА
     # (сюди потрапляють повідомлення активних чатів — миттєве пересилання)
     # ==========================================
-    application.add_handler(MessageHandler(
-        filters.ChatType.GROUPS & (filters.TEXT | MEDIA_FILTER) & ~filters.COMMAND,
-        relay_teacher_hub_message
-    ))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, global_message_handler))
     application.add_handler(MessageHandler(MEDIA_FILTER, global_media_handler))
 
