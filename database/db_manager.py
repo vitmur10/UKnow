@@ -332,53 +332,6 @@ class Database:
         conn.commit()
         conn.close()
 
-    def get_assignment_topic_id(self, teacher_id, student_id):
-        """Повертає topic_id для конкретної активної пари викладач-учень."""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        cursor.execute('''SELECT topic_id FROM assignments
-                          WHERE teacher_id = ? AND student_id = ? AND is_active = 1
-                          ORDER BY assigned_date DESC, id DESC
-                          LIMIT 1''', (teacher_id, student_id))
-        row = cursor.fetchone()
-        conn.close()
-        return row[0] if row and row[0] is not None else None
-
-    def set_assignment_topic_id(self, teacher_id, student_id, topic_id):
-        """Зберігає topic_id для конкретної активної пари викладач-учень."""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        cursor.execute('''UPDATE assignments SET topic_id = ?
-                          WHERE teacher_id = ? AND student_id = ? AND is_active = 1''',
-                       (topic_id, teacher_id, student_id))
-        conn.commit()
-        conn.close()
-
-    def get_teacher_students_with_chat_history(self, teacher_id):
-        """
-        Активні учні викладача, з якими вже є direct messages.
-        Повертає: user_id, username, first_name, last_name, role, topic_id, messages_count.
-        """
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        cursor.execute('''SELECT u.user_id, u.username, u.first_name, u.last_name, u.role,
-                                 a.topic_id, COUNT(m.id) AS messages_count
-                          FROM assignments a
-                          JOIN users u ON u.user_id = a.student_id
-                          JOIN messages m ON (
-                              (m.from_user_id = a.student_id AND m.to_user_id = a.teacher_id)
-                              OR (m.from_user_id = a.teacher_id AND m.to_user_id = a.student_id)
-                          )
-                          WHERE a.teacher_id = ?
-                            AND a.is_active = 1
-                            AND u.is_active = 1
-                            AND m.group_id IS NULL
-                          GROUP BY u.user_id, u.username, u.first_name, u.last_name, u.role, a.topic_id
-                          ORDER BY u.first_name, u.last_name''', (teacher_id,))
-        rows = cursor.fetchall()
-        conn.close()
-        return rows
-
     def get_student_by_topic_id(self, topic_id, hub_chat_id=None):
         """
         Повертає рядок users для учня за topic_id.
