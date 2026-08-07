@@ -354,6 +354,109 @@ async def invite_hub_teacher_command(update: Update, context: ContextTypes.DEFAU
     await msg.reply_text(invite_note.lstrip(), parse_mode='HTML')
 
 
+async def create_teacher_topics_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /topics [teacher_id]
+    Створює topics для активних учнів викладача, з якими вже є direct chat history.
+    Не створює дублікати, якщо assignments.topic_id вже заповнений.
+    """
+    chat = update.effective_chat
+    msg = update.message
+    admin = db.get_user(update.effective_user.id)
+
+    if not admin or admin[4] != 'admin':
+        await msg.reply_text("❌ Команда доступна лише адміністраторам.")
+        return
+
+    teacher_id = None
+    if context.args:
+        try:
+            teacher_id = int(context.args[0])
+        except ValueError:
+            await msg.reply_text("teacher_id має бути числом.")
+            return
+    elif chat.type in ('group', 'supergroup'):
+        bound_teacher = db.get_teacher_by_hub_chat_id(chat.id)
+        if bound_teacher:
+            teacher_id = bound_teacher[0]
+
+    if not teacher_id:
+        await msg.reply_text(
+            "Формат: <code>/topics teacher_id</code>\n"
+            "Або виконайте <code>/topics</code> прямо у вже прив'язаному Teacher Hub.",
+            parse_mode='HTML'
+        )
+        return
+
+    teacher = db.get_user(teacher_id)
+    if not teacher or teacher[4] != 'teacher':
+        await msg.reply_text("❌ Викладача з таким ID не знайдено.")
+        return
+
+    hub_chat_id = db.get_hub_chat_id(teacher_id)
+    if chat.type in ('group', 'supergroup'):
+        if hub_chat_id and int(hub_chat_id) != int(chat.id):
+            await msg.reply_text(
+                "❌ Цей викладач уже прив'язаний до іншого Teacher Hub.\n"
+                f"Поточний hub_chat_id у БД: <code>{hub_chat_id}</code>",
+                parse_mode='HTML'
+            )
+            return
+        if not hub_chat_id:
+            db.set_hub_chat_id(teacher_id, chat.id)
+            hub_chat_id = chat.id
+
+    if not hub_chat_id:
+        await msg.reply_text("❌ Для цього викладача ще не налаштовано Teacher Hub.")
+        return
+
+    students = db.get_teacher_students_with_chat_history(teacher_id)
+    if not students:
+        await msg.reply_text("Немає активних учнів з історією переписки для цього викладача.")
+        return
+
+    created = 0
+    skipped = 0
+    failed = []
+
+    for student in students:
+        student_id, _, first_name, last_name, _, topic_id, messages_count = student
+        student_name = f"{first_name or ''} {last_name or ''}".strip() or str(student_id)
+
+        if topic_id:
+            skipped += 1
+            continue
+
+        try:
+            topic = await context.bot.create_forum_topic(
+                chat_id=hub_chat_id,
+                name=f"Учень: {student_name}"[:128]
+            )
+            db.set_assignment_topic_id(teacher_id, student_id, topic.message_thread_id)
+            await _send_old_history_to_topic(
+                context, hub_chat_id, topic.message_thread_id, teacher_id, student_id
+            )
+            created += 1
+        except Exception as e:
+            print(f"[hub] bulk topic create error for {student_id}: {e}")
+            failed.append(f"{student_name} ({student_id})")
+
+    teacher_name = html.escape(f"{teacher[2]} {teacher[3]}".strip())
+    text = (
+        f"✅ Масове створення topics завершено.\n"
+        f"Викладач: <b>{teacher_name}</b>\n"
+        f"Створено: <b>{created}</b>\n"
+        f"Пропущено без дублювання: <b>{skipped}</b>\n"
+        f"Помилок: <b>{len(failed)}</b>"
+    )
+    if failed:
+        text += "\n\nНе вдалося створити:\n" + "\n".join(html.escape(name) for name in failed[:15])
+        if len(failed) > 15:
+            text += f"\n...і ще {len(failed) - 15}"
+
+    await msg.reply_text(text, parse_mode='HTML')
+
+
 async def _auto_bind_teacher_hub_if_possible(update: Update) -> bool:
     """
     Автоматично прив'язує forum-супергрупу до викладача при першому повідомленні.

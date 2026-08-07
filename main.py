@@ -63,7 +63,7 @@ from handlers.chat_engine import (
     chat_end, menu_button_router, relay_chat_message, get_active_chat,
     delete_for_everyone, relay_teacher_hub_message, chatid_command,
     bind_hub_command, setup_hub_command, hubs_status_command,
-    invite_hub_teacher_command
+    invite_hub_teacher_command, create_teacher_topics_command
 )
 
 # ==========================================
@@ -318,6 +318,8 @@ def main():
     application.add_handler(CommandHandler('setup_hub', setup_hub_command))
     application.add_handler(CommandHandler('hubs_status', hubs_status_command))
     application.add_handler(CommandHandler('invite_hub_teacher', invite_hub_teacher_command))
+    application.add_handler(CommandHandler('topics', create_teacher_topics_command))
+    application.add_handler(CommandHandler('create_teacher_topics', create_teacher_topics_command))
 
     application.add_handler(CommandHandler('admin', admin_command))
     application.add_handler(CommandHandler('manager', manager_command))
