@@ -499,6 +499,7 @@ export default function TeacherWorkspace() {
           setActiveSection={setActiveSection}
           selectedChatId={selectedChatId}
           openChat={openChat}
+          navSections={navSections}
           hiddenOnMobile={Boolean(selectedChatId) || activeSection !== "chats"}
         />
 
@@ -570,6 +571,7 @@ function ChatList({
   setActiveSection,
   selectedChatId,
   openChat,
+  navSections,
   hiddenOnMobile,
 }) {
   const [searchOpen, setSearchOpen] = useState(Boolean(query));
