@@ -23,6 +23,8 @@ all_usernames.txt
 *.csv
 *.json
 temp_data/
+!miniapp/package.json
+!miniapp/package-lock.json
 
 # --- OS ---
 .DS_Store
