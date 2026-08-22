@@ -69,6 +69,23 @@ export default function TeacherWorkspace() {
     [chats, selectedChatId],
   );
 
+  const navSections = useMemo(() => (
+    role === "admin"
+      ? [
+          { id: "admin", label: "Адмін", icon: <SlidersHorizontal size={18} /> },
+          { id: "chats", label: "Чати", icon: <MessageIcon /> },
+          { id: "students", label: "Учні", icon: <Users size={18} /> },
+          { id: "lessons", label: "Уроки", icon: <BookOpen size={18} /> },
+          { id: "profile", label: "Профіль", icon: <User size={18} /> },
+        ]
+      : [
+          { id: "chats", label: "Чати", icon: <MessageIcon /> },
+          { id: "students", label: "Учні", icon: <Users size={18} /> },
+          { id: "lessons", label: "Уроки", icon: <BookOpen size={18} /> },
+          { id: "profile", label: "Профіль", icon: <User size={18} /> },
+        ]
+  ), [role]);
+
   const teacherOptions = useMemo(() => teachers, [teachers]);
 
   const filteredChats = useMemo(() => {
@@ -144,6 +161,9 @@ export default function TeacherWorkspace() {
           setChats(bootstrap.chats || []);
           setTeachers(bootstrap.teachers || []);
           setMessages(bootstrap.messages || []);
+          if (bootstrap.role === "admin") {
+            setActiveSection("admin");
+          }
           if (initialChatId) setSelectedChatId(initialChatId);
         }
 
@@ -180,6 +200,9 @@ export default function TeacherWorkspace() {
         setChats(payload.chats || []);
         setTeachers(payload.teachers || []);
         setMessages(payload.messages || []);
+        if (payload.role === "admin" && activeSection === "chats" && !selectedChatIdRef.current) {
+          setActiveSection("admin");
+        }
       } catch {
         // WebSocket remains the primary channel; polling is only a quiet fallback.
       }
@@ -479,7 +502,15 @@ export default function TeacherWorkspace() {
           hiddenOnMobile={Boolean(selectedChatId) || activeSection !== "chats"}
         />
 
-        {activeSection === "chats" ? <ChatPanel
+        {activeSection === "admin" ? <AdminPanel
+          role={role}
+          chats={chats}
+          allChats={chats}
+          teachers={teacherOptions}
+          openChat={openChat}
+          setActiveSection={setActiveSection}
+          back={() => setActiveSection("chats")}
+        /> : activeSection === "chats" ? <ChatPanel
           role={role}
           chat={selectedChat}
           messages={visibleMessages}
@@ -520,7 +551,7 @@ export default function TeacherWorkspace() {
           />
         )}
       </div>
-    </div>
+  </div>
   );
 }
 
@@ -686,11 +717,16 @@ function ChatList({
           </button>
         ))}
       </div>
-      <nav className="grid h-16 grid-cols-4 border-t border-zinc-100 bg-white text-[11px] text-zinc-500">
-        <BottomNavItem active={activeSection === "chats"} icon={<MessageIcon />} label="Чати" onClick={() => setActiveSection("chats")} />
-        <BottomNavItem active={activeSection === "students"} icon={<Users size={18} />} label="Учні" onClick={() => setActiveSection("students")} />
-        <BottomNavItem active={activeSection === "lessons"} icon={<BookOpen size={18} />} label="Уроки" onClick={() => setActiveSection("lessons")} />
-        <BottomNavItem active={activeSection === "profile"} icon={<User size={18} />} label="Профіль" onClick={() => setActiveSection("profile")} />
+      <nav className={`grid h-16 border-t border-zinc-100 bg-white text-[11px] text-zinc-500 ${navSections.length === 5 ? "grid-cols-5" : "grid-cols-4"}`}>
+        {navSections.map((item) => (
+          <BottomNavItem
+            key={item.id}
+            active={activeSection === item.id}
+            icon={item.icon}
+            label={item.label}
+            onClick={() => setActiveSection(item.id)}
+          />
+        ))}
       </nav>
     </aside>
   );
@@ -1340,6 +1376,96 @@ function SectionPanel({ section, role, chats, allChats, openChat, updateStudent,
         <SummaryCard label="Чекають відповіді" value={allChats.filter((chat) => chat.waiting_reply).length} />
         <SummaryCard label="Архів" value={archivedStudents.length} />
         {role === "admin" && <SummaryCard label="Контактні попередження" value={allChats.filter((chat) => chat.possible_contact).length} />}
+      </main>
+    </section>
+  );
+}
+
+function AdminPanel({ role, chats, allChats, teachers, openChat, setActiveSection, back }) {
+  const unreadChats = allChats.filter((chat) => (chat.unread_count || 0) > 0);
+  const waitingChats = allChats.filter((chat) => chat.waiting_reply);
+  const contactChats = allChats.filter((chat) => chat.possible_contact);
+  const archivedChats = allChats.filter((chat) => chat.is_archived);
+  const recentPriority = [...allChats]
+    .filter((chat) => chat.waiting_reply || chat.possible_contact || (chat.unread_count || 0) > 0)
+    .sort((a, b) => {
+      const score = (chat) => {
+        let value = 0;
+        if (chat.possible_contact) value += 4;
+        if (chat.waiting_reply) value += 2;
+        value += Math.min(chat.unread_count || 0, 3);
+        return value;
+      };
+      return score(b) - score(a);
+    })
+    .slice(0, 8);
+
+  return (
+    <section className="flex h-full min-h-0 flex-col bg-white">
+      <PanelHeader title="Адмін" subtitle={role === "admin" ? "Керування workspace" : "Доступ обмежено"} back={back} />
+      <main className="min-h-0 flex-1 overflow-y-auto bg-[#f6f7fb] px-4 py-4">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <SummaryCard label="Усього чатів" value={allChats.length} />
+          <SummaryCard label="Непрочитані" value={unreadChats.length} />
+          <SummaryCard label="Чекають відповіді" value={waitingChats.length} />
+          <SummaryCard label="Контактні попередження" value={contactChats.length} />
+          <SummaryCard label="В архіві" value={archivedChats.length} />
+          <SummaryCard label="Викладачів" value={teachers.length} />
+        </div>
+
+        <div className="mt-4 rounded-lg border border-zinc-100 bg-white px-4 py-4">
+          <p className="text-sm font-semibold text-zinc-800">Швидкі переходи</p>
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {[
+              ["chats", "Чати"],
+              ["students", "Учні"],
+              ["lessons", "Уроки"],
+              ["profile", "Профіль"],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                onClick={() => setActiveSection(id)}
+                className="h-10 rounded-lg bg-zinc-100 px-3 text-sm font-semibold text-zinc-700 hover:bg-zinc-200"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-lg border border-zinc-100 bg-white px-4 py-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-zinc-800">Пріоритетні чати</p>
+              <p className="text-xs text-zinc-500">Непрочитані, з очікуванням відповіді або з контактними даними</p>
+            </div>
+            <span className="text-xs text-zinc-500">{recentPriority.length} з {allChats.length}</span>
+          </div>
+
+          <div className="mt-3 space-y-2">
+            {recentPriority.length ? recentPriority.map((chat) => (
+              <button
+                key={chat.id}
+                onClick={() => openChat(chat.id)}
+                className="flex w-full items-center justify-between gap-3 rounded-lg border border-zinc-100 px-3 py-3 text-left hover:bg-zinc-50"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-zinc-900">{chat.title}</p>
+                  <p className="truncate text-xs text-zinc-500">
+                    {[chat.language, chat.level, chat.teacher_name].filter(Boolean).join(" · ")}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2 text-xs font-semibold">
+                  {chat.possible_contact && <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-700">Контакт</span>}
+                  {chat.waiting_reply && <span className="rounded-full bg-amber-100 px-2 py-1 text-amber-700">Відповісти</span>}
+                  {(chat.unread_count || 0) > 0 && <span className="rounded-full bg-[#0c99c9] px-2 py-1 text-white">{chat.unread_count}</span>}
+                </div>
+              </button>
+            )) : (
+              <EmptyState text="Поки що немає пріоритетних чатів" />
+            )}
+          </div>
+        </div>
       </main>
     </section>
   );
