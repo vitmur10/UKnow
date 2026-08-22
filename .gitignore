@@ -31,3 +31,8 @@ Thumbs.db
 # --- Infrastructure ---
 .python-version
 *.db
+*.rdb
+
+# --- Frontend ---
+node_modules/
+dist/

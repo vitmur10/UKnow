@@ -34,7 +34,7 @@ from handlers.registration import (
 # Спільні / Глобальні
 from handlers.common import (
     common_callbacks, route_manager_contact, fallback_message, handle_unknown_text,
-    myid_command, manager_command, handle_history_button, show_media_gallery
+    myid_command, manager_command, miniapp_command, handle_history_button, show_media_gallery
 )
 
 # Учень
@@ -308,6 +308,7 @@ def main():
 
     application.add_handler(CommandHandler('admin', admin_command))
     application.add_handler(CommandHandler('manager', manager_command))
+    application.add_handler(CommandHandler('miniapp', miniapp_command))
     application.add_handler(CommandHandler('teacher', teacher_command))
     application.add_handler(CommandHandler('check_db', check_database_command))
     application.add_handler(CommandHandler('test_now', force_test_reminders))

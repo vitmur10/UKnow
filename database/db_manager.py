@@ -1,9 +1,16 @@
 import sqlite3
+import os
+import re
+from pathlib import Path
 
 
 class Database:
-    def __init__(self, db_name="school_bot.db"):
-        self.db_name = db_name
+    def __init__(self, db_name=None):
+        db_name = db_name or os.getenv("DB_NAME", "school_bot.db")
+        db_path = Path(db_name)
+        if not db_path.is_absolute():
+            db_path = Path(__file__).resolve().parent.parent / db_path
+        self.db_name = str(db_path)
         self.init_db()
 
     def init_db(self):
@@ -62,6 +69,50 @@ class Database:
             cursor.execute("ALTER TABLE messages ADD COLUMN is_deleted BOOLEAN DEFAULT 0")
         except Exception:
             pass
+        for column_sql in [
+            "ALTER TABLE messages ADD COLUMN deleted_by INTEGER",
+            "ALTER TABLE messages ADD COLUMN deleted_at DATETIME",
+            "ALTER TABLE messages ADD COLUMN edited_at DATETIME",
+            "ALTER TABLE messages ADD COLUMN edited_by INTEGER",
+            "ALTER TABLE messages ADD COLUMN reply_to_message_id INTEGER",
+            "ALTER TABLE messages ADD COLUMN possible_contact BOOLEAN DEFAULT 0",
+            "ALTER TABLE messages ADD COLUMN original_filename TEXT",
+            "ALTER TABLE messages ADD COLUMN mime_type TEXT",
+        ]:
+            try:
+                cursor.execute(column_sql)
+            except Exception:
+                pass
+
+        for column_sql in [
+            "ALTER TABLE users ADD COLUMN student_status TEXT DEFAULT 'active'",
+            "ALTER TABLE users ADD COLUMN level TEXT",
+            "ALTER TABLE users ADD COLUMN learning_format TEXT",
+            "ALTER TABLE users ADD COLUMN learning_goal TEXT",
+            "ALTER TABLE users ADD COLUMN admin_note TEXT",
+        ]:
+            try:
+                cursor.execute(column_sql)
+            except Exception:
+                pass
+
+        cursor.execute('''UPDATE messages
+                          SET is_read = 1
+                          WHERE from_user_id IN (
+                              SELECT user_id FROM users WHERE role IN ('teacher', 'admin')
+                          )
+                          AND group_id IS NULL
+                          AND is_read = 0''')
+
+        cursor.execute('''CREATE TABLE IF NOT EXISTS message_edits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id INTEGER,
+            previous_text TEXT,
+            new_text TEXT,
+            edited_by INTEGER,
+            edited_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (message_id) REFERENCES messages (id)
+        )''')
 
         # Доставлені копії повідомлень (для функції "видалити для всіх"):
         # для кожного запису messages зберігаємо telegram message_id у кожному чаті,
@@ -279,6 +330,15 @@ class Database:
         conn.close()
         return result
 
+    def get_active_teacher_ids_for_students(self, teacher_id):
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute('''SELECT student_id FROM assignments
+                          WHERE teacher_id = ? AND is_active = 1''', (teacher_id,))
+        result = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return result
+
     def create_group(self, name, teacher_id, group_type='pair'):
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
@@ -425,18 +485,40 @@ class Database:
         return result
 
     def save_message(self, from_user_id, to_user_id=None, group_id=None, message_text="", message_type='text',
-                     file_id=None):
+                     file_id=None, reply_to_message_id=None, original_filename=None, mime_type=None):
         """Зберігає повідомлення і повертає його id у таблиці messages."""
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
+        cursor.execute("SELECT role FROM users WHERE user_id = ?", (from_user_id,))
+        sender_role = (cursor.fetchone() or [""])[0]
+        is_read = 1 if sender_role in ("teacher", "admin") else 0
+        possible_contact = int(self.detect_possible_contact(message_text))
         cursor.execute('''INSERT INTO messages
-                         (from_user_id, to_user_id, group_id, message_text, message_type, file_id)
-                         VALUES (?, ?, ?, ?, ?, ?)''',
-                       (from_user_id, to_user_id, group_id, message_text, message_type, file_id))
+                           (from_user_id, to_user_id, group_id, message_text, message_type, file_id,
+                            is_read, reply_to_message_id, possible_contact, original_filename, mime_type)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                         (from_user_id, to_user_id, group_id, message_text, message_type, file_id,
+                          is_read, reply_to_message_id, possible_contact, original_filename, mime_type))
         message_db_id = cursor.lastrowid
         conn.commit()
         conn.close()
         return message_db_id
+
+    @staticmethod
+    def detect_possible_contact(text):
+        """Грубий детектор контактів для адмінського контролю."""
+        if not text:
+            return False
+        patterns = [
+            r"(?<!\w)@[A-Za-z0-9_]{4,32}",
+            r"\b(?:https?://)?t\.me/[A-Za-z0-9_]{4,32}\b",
+            r"\b(?:https?://)?(?:instagram\.com|wa\.me|viber\.com|facebook\.com|messenger\.com)/[^\s]+",
+            r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b",
+            r"(?:\+?\d[\d\s().-]{7,}\d)",
+            r"\b(?:instagram|insta|whatsapp|viber|telegram|телеграм|вайбер|ватсап|email|e-mail)\b",
+            r"\b(?:iban|карта|card|paypal|mono|privat|приват|реквізит|payment|платіж)\b",
+        ]
+        return any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns)
 
     # ==================================================================
     # "ВИДАЛИТИ ДЛЯ ВСІХ": облік доставлених копій
@@ -479,11 +561,330 @@ class Database:
         conn.close()
         return result
 
-    def mark_message_deleted(self, message_db_id):
+    def get_delivery_tg_message_id(self, message_db_id, chat_id):
+        """Повертає Telegram message_id для конкретної копії повідомлення в chat_id."""
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute('''SELECT tg_message_id FROM delivered_messages
+                          WHERE message_db_id = ? AND chat_id = ?''',
+                       (message_db_id, chat_id))
+        result = cursor.fetchone()
+        conn.close()
+        return result[0] if result else None
+
+    def mark_message_deleted(self, message_db_id, deleted_by=None):
         """Позначає повідомлення видаленим (текст лишається в БД для адміна)."""
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
-        cursor.execute("UPDATE messages SET is_deleted = 1 WHERE id = ?", (message_db_id,))
+        cursor.execute('''UPDATE messages
+                          SET is_deleted = 1, deleted_by = ?, deleted_at = CURRENT_TIMESTAMP
+                          WHERE id = ?''', (deleted_by, message_db_id))
+        conn.commit()
+        conn.close()
+
+    def edit_message_text(self, message_db_id, new_text, edited_by):
+        """Редагує текст і зберігає історію змін."""
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute("SELECT message_text FROM messages WHERE id = ?", (message_db_id,))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return False
+        previous_text = row[0] or ""
+        cursor.execute('''INSERT INTO message_edits
+                          (message_id, previous_text, new_text, edited_by)
+                          VALUES (?, ?, ?, ?)''',
+                       (message_db_id, previous_text, new_text, edited_by))
+        cursor.execute('''UPDATE messages
+                          SET message_text = ?, edited_by = ?, edited_at = CURRENT_TIMESTAMP,
+                              possible_contact = ?
+                          WHERE id = ?''',
+                       (new_text, edited_by, int(self.detect_possible_contact(new_text)), message_db_id))
+        conn.commit()
+        conn.close()
+        return True
+
+    def get_message_edits(self, message_db_id):
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute('''SELECT id, message_id, previous_text, new_text, edited_by, edited_at
+                          FROM message_edits
+                          WHERE message_id = ?
+                          ORDER BY edited_at ASC, id ASC''', (message_db_id,))
+        result = cursor.fetchall()
+        conn.close()
+        return result
+
+    def get_message_by_id(self, message_db_id):
+        """Повертає один рядок messages зі стабільним набором колонок для Mini App."""
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute('''SELECT m.id, m.from_user_id, m.to_user_id, m.group_id,
+                                m.message_text, m.message_type, m.timestamp,
+                                m.is_read, m.file_id,
+                                u.first_name, u.last_name,
+                                COALESCE(m.is_deleted, 0),
+                                m.deleted_by, m.deleted_at, m.edited_at, m.edited_by,
+                                m.reply_to_message_id, COALESCE(m.possible_contact, 0),
+                                m.original_filename, m.mime_type,
+                                r.message_text, r.message_type,
+                                du.first_name, du.last_name,
+                                eu.first_name, eu.last_name,
+                                fu.role, tu.role
+                          FROM messages m
+                          JOIN users u ON m.from_user_id = u.user_id
+                          LEFT JOIN messages r ON r.id = m.reply_to_message_id
+                          LEFT JOIN users du ON du.user_id = m.deleted_by
+                          LEFT JOIN users eu ON eu.user_id = m.edited_by
+                          LEFT JOIN users fu ON fu.user_id = m.from_user_id
+                          LEFT JOIN users tu ON tu.user_id = m.to_user_id
+                          WHERE m.id = ?''', (message_db_id,))
+        result = cursor.fetchone()
+        conn.close()
+        return result
+
+    def teacher_can_access_student(self, teacher_id, student_id):
+        """Перевіряє, що student належить teacher. Адмін має повний доступ."""
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute("SELECT role FROM users WHERE user_id = ? AND is_active = 1", (teacher_id,))
+        role = cursor.fetchone()
+        if role and role[0] == "admin":
+            conn.close()
+            return True
+        cursor.execute('''SELECT 1 FROM assignments
+                          WHERE teacher_id = ? AND student_id = ? AND is_active = 1''',
+                       (teacher_id, student_id))
+        assigned = cursor.fetchone()
+        conn.close()
+        return bool(assigned)
+
+    def get_miniapp_dialogs(self, teacher_id):
+        """Список direct діалогів викладача для Mini App."""
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute("SELECT role FROM users WHERE user_id = ?", (teacher_id,))
+        role_row = cursor.fetchone()
+        is_admin = bool(role_row and role_row[0] == "admin")
+        student_ids = self.get_active_teacher_ids_for_students(teacher_id) if not is_admin else []
+
+        if is_admin:
+            cursor.execute('''WITH dialog_students AS (
+                                  SELECT user_id
+                                  FROM users
+                                  WHERE role = 'student'
+                                  UNION
+                                  SELECT from_user_id AS user_id
+                                  FROM messages
+                                  WHERE group_id IS NULL
+                                    AND from_user_id IN (SELECT user_id FROM users WHERE role = 'student')
+                                  UNION
+                                  SELECT to_user_id AS user_id
+                                  FROM messages
+                                  WHERE group_id IS NULL
+                                    AND to_user_id IN (SELECT user_id FROM users WHERE role = 'student')
+                              ),
+                              last_messages AS (
+                                  SELECT CASE
+                                           WHEN fu.role = 'student' THEN m.from_user_id
+                                           ELSE m.to_user_id
+                                         END AS student_id,
+                                         MAX(m.id) AS last_message_id
+                                  FROM messages m
+                                  LEFT JOIN users fu ON fu.user_id = m.from_user_id
+                                  LEFT JOIN users tu ON tu.user_id = m.to_user_id
+                                  WHERE m.group_id IS NULL
+                                    AND COALESCE(m.is_deleted, 0) = 0
+                                    AND (fu.role = 'student' OR tu.role = 'student')
+                                  GROUP BY student_id
+                              ),
+                              unread AS (
+                                  SELECT from_user_id AS student_id, COUNT(*) AS unread_count
+                                  FROM messages
+                                  WHERE is_read = 0 AND group_id IS NULL
+                                    AND COALESCE(is_deleted, 0) = 0
+                                    AND from_user_id IN (SELECT user_id FROM users WHERE role = 'student')
+                                  GROUP BY from_user_id
+                              )
+                              SELECT u.user_id, u.first_name, u.last_name, u.username,
+                                     lm.last_message_id, m.message_text, m.message_type,
+                                     m.timestamp, COALESCE(un.unread_count, 0),
+                                     m.from_user_id, u.language, u.level,
+                                     COALESCE(u.student_status, 'active'),
+                                      u.learning_format, u.learning_goal, u.admin_note,
+                                     t.first_name, t.last_name, a.teacher_id,
+                                     COALESCE(m.is_deleted, 0), COALESCE(m.possible_contact, 0),
+                                     (SELECT l.lesson_date || ' ' || substr(l.lesson_time, 1, 5)
+                                      FROM lessons l
+                                      WHERE l.student_id = u.user_id
+                                        AND l.status = 'scheduled'
+                                        AND l.lesson_date >= date('now')
+                                      ORDER BY l.lesson_date ASC, l.lesson_time ASC
+                                      LIMIT 1)
+                              FROM dialog_students ds
+                              JOIN users u ON u.user_id = ds.user_id
+                              LEFT JOIN assignments a ON a.student_id = u.user_id AND a.is_active = 1
+                              LEFT JOIN users t ON t.user_id = a.teacher_id
+                              LEFT JOIN last_messages lm ON lm.student_id = u.user_id
+                              LEFT JOIN messages m ON m.id = lm.last_message_id
+                              LEFT JOIN unread un ON un.student_id = u.user_id
+                              WHERE u.is_active = 1
+                              ORDER BY COALESCE(m.timestamp, '1970-01-01') DESC,
+                                       u.first_name COLLATE NOCASE ASC''')
+        else:
+            cursor.execute('''WITH dialog_students AS (
+                                  SELECT student_id AS user_id
+                                  FROM assignments
+                                  WHERE teacher_id = ? AND is_active = 1
+                              ),
+                              last_messages AS (
+                                  SELECT CASE
+                                           WHEN fu.role = 'student' THEN m.from_user_id
+                                           ELSE m.to_user_id
+                                         END AS student_id,
+                                         MAX(m.id) AS last_message_id
+                                  FROM messages m
+                                  LEFT JOIN users fu ON fu.user_id = m.from_user_id
+                                  LEFT JOIN users tu ON tu.user_id = m.to_user_id
+                                  WHERE m.group_id IS NULL
+                                    AND COALESCE(m.is_deleted, 0) = 0
+                                    AND (
+                                        m.from_user_id IN (SELECT user_id FROM dialog_students)
+                                        OR m.to_user_id IN (SELECT user_id FROM dialog_students)
+                                    )
+                                  GROUP BY student_id
+                              ),
+                              unread AS (
+                                  SELECT from_user_id AS student_id, COUNT(*) AS unread_count
+                                  FROM messages
+                                  WHERE to_user_id = ? AND is_read = 0 AND group_id IS NULL
+                                    AND COALESCE(is_deleted, 0) = 0
+                                    AND from_user_id IN (SELECT user_id FROM users WHERE role = 'student')
+                                  GROUP BY from_user_id
+                              )
+                              SELECT u.user_id, u.first_name, u.last_name, u.username,
+                                     lm.last_message_id, m.message_text, m.message_type,
+                                     m.timestamp, COALESCE(un.unread_count, 0),
+                                     m.from_user_id, u.language, u.level,
+                                     COALESCE(u.student_status, 'active'),
+                                     u.learning_format, u.learning_goal, u.admin_note,
+                                     NULL, NULL, ?,
+                                     COALESCE(m.is_deleted, 0), COALESCE(m.possible_contact, 0),
+                                     (SELECT l.lesson_date || ' ' || substr(l.lesson_time, 1, 5)
+                                      FROM lessons l
+                                      WHERE l.student_id = u.user_id
+                                        AND l.teacher_id = ?
+                                        AND l.status = 'scheduled'
+                                        AND l.lesson_date >= date('now')
+                                      ORDER BY l.lesson_date ASC, l.lesson_time ASC
+                                      LIMIT 1)
+                              FROM dialog_students ds
+                              JOIN users u ON u.user_id = ds.user_id
+                              LEFT JOIN last_messages lm ON lm.student_id = u.user_id
+                              LEFT JOIN messages m ON m.id = lm.last_message_id
+                              LEFT JOIN unread un ON un.student_id = u.user_id
+                              WHERE u.is_active = 1
+                              ORDER BY COALESCE(m.timestamp, '1970-01-01') DESC,
+                                       u.first_name COLLATE NOCASE ASC''',
+                           (teacher_id, teacher_id, teacher_id, teacher_id))
+        result = cursor.fetchall()
+        conn.close()
+        return result
+
+    def get_miniapp_history(self, teacher_id, student_id=None, limit=200, include_deleted=True):
+        """Історія direct повідомлень для Mini App, у хронологічному порядку."""
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute("SELECT role FROM users WHERE user_id = ?", (teacher_id,))
+        role_row = cursor.fetchone()
+        is_admin = bool(role_row and role_row[0] == "admin")
+        params = []
+        where = "m.group_id IS NULL"
+        if not include_deleted:
+            where += " AND COALESCE(m.is_deleted, 0) = 0"
+
+        if student_id:
+            where += ''' AND (m.from_user_id = ? OR m.to_user_id = ?)'''
+            params.extend([student_id, student_id])
+        elif not is_admin:
+            student_ids = self.get_active_teacher_ids_for_students(teacher_id)
+            if student_ids:
+                placeholders = ",".join(["?"] * len(student_ids))
+                where += f''' AND (m.from_user_id IN ({placeholders}) OR m.to_user_id IN ({placeholders}))'''
+                params.extend(student_ids)
+                params.extend(student_ids)
+            else:
+                where += " AND 1 = 0"
+
+        params.append(limit)
+        cursor.execute(f'''SELECT m.id, m.from_user_id, m.to_user_id, m.group_id,
+                                 m.message_text, m.message_type, m.timestamp,
+                                 m.is_read, m.file_id,
+                                 u.first_name, u.last_name,
+                                 COALESCE(m.is_deleted, 0),
+                                 m.deleted_by, m.deleted_at, m.edited_at, m.edited_by,
+                                 m.reply_to_message_id, COALESCE(m.possible_contact, 0),
+                                 m.original_filename, m.mime_type,
+                                 r.message_text, r.message_type,
+                                 du.first_name, du.last_name,
+                                 eu.first_name, eu.last_name,
+                                 fu.role, tu.role
+                          FROM messages m
+                          JOIN users u ON m.from_user_id = u.user_id
+                          LEFT JOIN messages r ON r.id = m.reply_to_message_id
+                          LEFT JOIN users du ON du.user_id = m.deleted_by
+                          LEFT JOIN users eu ON eu.user_id = m.edited_by
+                          LEFT JOIN users fu ON fu.user_id = m.from_user_id
+                          LEFT JOIN users tu ON tu.user_id = m.to_user_id
+                          WHERE {where}
+                          ORDER BY m.timestamp DESC, m.id DESC
+                          LIMIT ?''', params)
+        result = list(reversed(cursor.fetchall()))
+        conn.close()
+        return result
+
+    def set_student_status(self, student_id, status):
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET student_status = ? WHERE user_id = ? AND role = 'student'",
+                       (status, student_id))
+        conn.commit()
+        conn.close()
+
+    def replace_student_teacher(self, student_id, teacher_id):
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id FROM users WHERE user_id = ? AND role = 'teacher' AND is_active = 1",
+                       (teacher_id,))
+        teacher_row = cursor.fetchone()
+        if not teacher_row:
+            conn.close()
+            return False
+        cursor.execute("UPDATE assignments SET is_active = 0 WHERE student_id = ?", (student_id,))
+        cursor.execute('''INSERT INTO assignments (teacher_id, student_id, is_active)
+                          VALUES (?, ?, 1)''', (teacher_id, student_id))
+        conn.commit()
+        conn.close()
+        return True
+
+    def update_student_profile(self, student_id, level=None, learning_format=None, learning_goal=None, admin_note=None):
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        updates = []
+        params = []
+        for key, value in [
+            ("level", level),
+            ("learning_format", learning_format),
+            ("learning_goal", learning_goal),
+            ("admin_note", admin_note),
+        ]:
+            if value is not None:
+                updates.append(f"{key} = ?")
+                params.append(value)
+        if updates:
+            params.append(student_id)
+            cursor.execute(f"UPDATE users SET {', '.join(updates)} WHERE user_id = ? AND role = 'student'", params)
         conn.commit()
         conn.close()
 
@@ -587,6 +988,7 @@ class Database:
             FROM messages m
             JOIN users u ON m.from_user_id = u.user_id
             WHERE m.to_user_id = ? AND m.is_read = 0 AND m.group_id IS NULL
+              AND u.role = 'student'
             GROUP BY m.from_user_id
             ORDER BY last_time DESC
         ''', (teacher_id,))
@@ -601,6 +1003,7 @@ class Database:
         cursor.execute('''
             UPDATE messages SET is_read = 1
             WHERE from_user_id = ? AND to_user_id = ? AND is_read = 0
+              AND group_id IS NULL
         ''', (from_user_id, to_user_id))
         conn.commit()
         conn.close()
@@ -612,6 +1015,7 @@ class Database:
         cursor.execute('''
             SELECT COUNT(*) FROM messages
             WHERE to_user_id = ? AND is_read = 0 AND group_id IS NULL
+              AND from_user_id IN (SELECT user_id FROM users WHERE role = 'student')
         ''', (teacher_id,))
         result = cursor.fetchone()
         conn.close()

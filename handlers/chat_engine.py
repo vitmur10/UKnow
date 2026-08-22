@@ -20,16 +20,19 @@ handlers/chat_engine.py — двигун P2P-чатів (учень ↔ викл
 import html
 import io
 import sqlite3
+import asyncio
 
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, InputFile
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, InputFile, WebAppInfo
 from telegram.ext import ContextTypes
 
 from database.db_manager import db
 from utils.keyboards import get_main_keyboard, get_chat_active_keyboard
 from utils.helpers import is_lesson_link
 from config.settings import (
+    MINIAPP_URL,
     now_kyiv_str, now_kyiv, ALL_MAIN_MENU_BUTTONS_LIST,
 )
+from services.miniapp_bridge import mirror_delete_to_miniapp, mirror_message_to_miniapp
 
 # ==========================================================================
 # СТАН АКТИВНОГО ЧАТУ (context.user_data)
@@ -401,12 +404,20 @@ def _build_reply_markup(sender_role: str, sender_id: int, kind: str, peer_id: in
             )
         ]])
     # відправник — учень, отримувач — викладач
-    return InlineKeyboardMarkup([[
+    buttons = [[
         InlineKeyboardButton(
             f"↩️ Відповісти {sender_first_name}",
             callback_data=f"inbox_reply_{sender_id}"
         )
-    ]])
+    ]]
+    if MINIAPP_URL:
+        buttons.append([
+            InlineKeyboardButton(
+                "Відкрити чат",
+                web_app=WebAppInfo(url=f"{MINIAPP_URL}?startapp=chat_{sender_id}")
+            )
+        ])
+    return InlineKeyboardMarkup(buttons)
 
 
 async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -485,6 +496,15 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         # Фіксуємо оригінал у чаті відправника (щоб /del міг знайти повідомлення)
         db.save_delivery(msg_db_id, sender_id, msg.message_id)
+        asyncio.create_task(mirror_message_to_miniapp(
+            sqlite_message_id=msg_db_id,
+            from_user_id=sender_id,
+            to_user_id=to_user_id_for_db,
+            message_text=content_text,
+            message_type=media_type,
+            file_id=file_id,
+            telegram_message_id=msg.message_id,
+        ))
     except Exception as e:
         print(f"[relay] db save error: {e}")
 
@@ -650,6 +670,7 @@ async def delete_for_everyone(update: Update, context: ContextTypes.DEFAULT_TYPE
             print(f"[del] не вдалося видалити {tg_message_id} у {chat_id}: {e}")
 
     db.mark_message_deleted(msg_db_id)
+    asyncio.create_task(mirror_delete_to_miniapp(msg_db_id))
     await _cleanup_command()
 
     if failed:

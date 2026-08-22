@@ -1,12 +1,12 @@
 from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, WebAppInfo
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 import html
 from database.db_manager import db
 from utils.keyboards import get_main_keyboard, get_calendar_keyboard
 from utils.helpers import format_lesson_time
-from config.settings import IMAGE_WARNING_FILE_ID, logger, KYIV_TZ
+from config.settings import IMAGE_WARNING_FILE_ID, MINIAPP_URL, logger, KYIV_TZ
 
 
 # ПРИМІТКА: імпорти show_teacher_chat_history та show_student_chat_history
@@ -28,6 +28,23 @@ async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def manager_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /manager для быстрого доступа к менеджеру"""
     await send_manager_contact_button(update, context)
+
+
+async def miniapp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Відкриває Teacher's Hub як Telegram Mini App."""
+    user = db.get_user(update.effective_user.id)
+    if not user or user[4] not in ("teacher", "admin"):
+        await update.message.reply_text("❌ Mini App доступний лише викладачам та адміністраторам.")
+        return
+
+    if not MINIAPP_URL:
+        await update.message.reply_text("❌ MINIAPP_URL не налаштований у .env")
+        return
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Teacher's Hub", web_app=WebAppInfo(url=MINIAPP_URL))]
+    ])
+    await update.message.reply_text("Відкрити кабінет викладача:", reply_markup=keyboard)
 
 
 async def send_manager_contact_button(update: Update, context: ContextTypes.DEFAULT_TYPE):

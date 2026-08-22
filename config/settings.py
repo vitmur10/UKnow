@@ -13,6 +13,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 SUPER_ADMIN_ID = int(os.getenv("SUPER_ADMIN_ID", 0))
 GOOGLE_SCRIPT_URL = os.getenv("GOOGLE_SCRIPT_URL")
 DB_NAME = os.getenv("DB_NAME", "school_bot.db")
+MINIAPP_URL = os.getenv("MINIAPP_URL", "")
 
 # ==========================================
 # 2. БАЗОВІ КОНСТАНТИ
