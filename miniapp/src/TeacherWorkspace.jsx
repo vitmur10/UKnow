@@ -1370,19 +1370,20 @@ function SectionPanel({ section, role, chats, allChats, lessons, openChat, updat
                 {role === "admin" && (
                   <div className="mt-3 grid grid-cols-3 gap-0.5">
                     {[
-                      ["active", "Активний"],
-                      ["paused", "Пауза"],
-                      ["completed", "Завершив"],
-                    ].map(([value, label]) => (
+                      ["active", "Активний", "Актив."],
+                      ["paused", "Пауза", "Пауза"],
+                      ["completed", "Завершив", "Архів"],
+                    ].map(([value, label, mobileLabel]) => (
                       <button
                         key={value}
                         onClick={() => updateStudent(chat.id, { student_status: value })}
                         className={[
-                          "h-6 min-w-0 rounded-md px-0.5 text-[10px] font-medium leading-none",
+                          "h-6 min-w-0 rounded-md px-0.5 text-[10px] font-medium leading-none tracking-normal",
                           chat.student_status === value ? "bg-[#0c99c9] text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200",
                         ].join(" ")}
                       >
-                        {label}
+                        <span className="sm:hidden">{mobileLabel}</span>
+                        <span className="hidden sm:inline">{label}</span>
                       </button>
                     ))}
                   </div>
