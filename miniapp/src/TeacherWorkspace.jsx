@@ -1368,7 +1368,7 @@ function SectionPanel({ section, role, chats, allChats, lessons, openChat, updat
                   {chat.waiting_reply && <span className="rounded-full bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-700">Відповісти</span>}
                 </div>
                 {role === "admin" && (
-                  <div className="mt-3 grid grid-cols-3 gap-1">
+                  <div className="mt-3 grid grid-cols-1 gap-1 sm:grid-cols-3">
                     {[
                       ["active", "Активний"],
                       ["paused", "Пауза"],
@@ -1378,7 +1378,7 @@ function SectionPanel({ section, role, chats, allChats, lessons, openChat, updat
                         key={value}
                         onClick={() => updateStudent(chat.id, { student_status: value })}
                         className={[
-                          "h-8 rounded-md text-xs font-medium",
+                          "min-h-8 rounded-md px-3 py-2 text-xs font-medium leading-4",
                           chat.student_status === value ? "bg-[#0c99c9] text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200",
                         ].join(" ")}
                       >
