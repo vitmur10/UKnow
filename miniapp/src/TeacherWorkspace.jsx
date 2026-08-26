@@ -663,19 +663,21 @@ function ChatList({
             )}
           </div>
         )}
-        <div className="grid grid-cols-[auto_auto_auto_auto] items-center justify-between gap-1.5 pb-0.5">
-          {FILTERS.map((filter) => (
-            <button
-              key={filter.id}
-              onClick={() => setActiveFilter(filter.id)}
-              className={[
-                "h-8 shrink-0 rounded-full px-2.5 text-[11px] font-semibold leading-none transition sm:px-3 sm:text-xs",
-                activeFilter === filter.id ? "bg-[#0b8fe3] text-white" : "bg-[#f4f5f7] text-zinc-700 hover:bg-zinc-200",
-              ].join(" ")}
-            >
-              {filter.label}
-            </button>
-          ))}
+        <div className="-mx-1 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="flex min-w-max items-center gap-1.5 px-1">
+            {FILTERS.map((filter) => (
+              <button
+                key={filter.id}
+                onClick={() => setActiveFilter(filter.id)}
+                className={[
+                  "h-8 shrink-0 rounded-full px-2.5 text-[11px] font-semibold leading-none transition sm:px-3 sm:text-xs",
+                  activeFilter === filter.id ? "bg-[#0b8fe3] text-white" : "bg-[#f4f5f7] text-zinc-700 hover:bg-zinc-200",
+                ].join(" ")}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
         </div>
         {role === "admin" && teacherOptions.length > 0 && filtersOpen && (
           <select
@@ -691,7 +693,7 @@ function ChatList({
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className={`min-h-0 flex-1 overflow-y-auto ${SCROLL_SAFE_AREA_CLASS}`}>
         {chats.map((chat, index) => (
           <button
             key={chat.id}
