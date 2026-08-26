@@ -31,6 +31,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 const API_BASE = import.meta.env.VITE_API_BASE || `${window.location.origin}/api`;
 const WS_BASE = import.meta.env.VITE_WS_BASE || `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}`;
 const ADMIN_SECTION_STORAGE_KEY = "uknow-miniapp-admin-section";
+const SCROLL_SAFE_AREA_CLASS = "pb-[calc(1rem+env(safe-area-inset-bottom))]";
 const FILTERS = [
   { id: "all", label: "Усі" },
   { id: "unread", label: "Непрочитані" },
@@ -498,7 +499,7 @@ export default function TeacherWorkspace() {
   }
 
   return (
-    <div className="h-screen bg-[#eef2f5] text-[#111827]">
+    <div className="h-[100dvh] bg-[#eef2f5] text-[#111827]">
       <div className="mx-auto grid h-full max-w-6xl overflow-hidden bg-white shadow-sm md:grid-cols-[380px_1fr] md:border-x md:border-zinc-200">
         <ChatList
           role={role}
@@ -1335,7 +1336,7 @@ function SectionPanel({ section, role, chats, allChats, lessons, openChat, updat
     return (
       <section className="flex h-full min-h-0 flex-col bg-white">
         <PanelHeader title="Учні" subtitle={`${activeStudents.length} активних · ${archivedStudents.length} в архіві`} back={back} />
-        <main className="flex-1 overflow-y-auto px-4 py-4">
+        <main className={`flex-1 overflow-y-auto px-4 py-4 ${role === "admin" ? SCROLL_SAFE_AREA_CLASS : ""}`}>
           <div className="grid gap-2">
             {allChats.map((chat) => (
               <div key={chat.id} className="rounded-lg border border-zinc-100 px-3 py-3">
@@ -1379,7 +1380,7 @@ function SectionPanel({ section, role, chats, allChats, lessons, openChat, updat
     return (
       <section className="flex h-full min-h-0 flex-col bg-white">
         <PanelHeader title="Уроки" subtitle={`${lessons.length} заплановано`} back={back} />
-        <main className="flex-1 overflow-y-auto px-4 py-4">
+        <main className={`flex-1 overflow-y-auto px-4 py-4 ${role === "admin" ? SCROLL_SAFE_AREA_CLASS : ""}`}>
           {!lessons.length ? <EmptyState text="Запланованих уроків не знайдено" /> : (
             <div className="space-y-2">
               {lessons.map((lesson) => {
@@ -1390,7 +1391,9 @@ function SectionPanel({ section, role, chats, allChats, lessons, openChat, updat
                     <p className="truncate text-sm font-semibold">{lesson.title}</p>
                     <p className="text-xs text-zinc-500">{formatDateTime(lesson.scheduled_at)}</p>
                   </div>
-                  <span className="truncate text-xs text-zinc-500">{lesson.kind === "group" ? (lesson.participants || "Група") : (lesson.student_name || "Індивідуально")}</span>
+                  <span className="min-w-0 max-w-[42%] shrink text-right text-xs leading-4 text-zinc-500 break-words">
+                    {lesson.kind === "group" ? (lesson.participants || "Група") : (lesson.student_name || "Індивідуально")}
+                  </span>
                   </>
                 );
                 if (lesson.chat_id) {
@@ -1398,7 +1401,7 @@ function SectionPanel({ section, role, chats, allChats, lessons, openChat, updat
                     <button
                       key={lesson.id}
                       onClick={() => openChat(lesson.chat_id)}
-                      className="flex w-full items-center gap-3 rounded-lg border border-zinc-100 px-3 py-3 text-left hover:bg-zinc-50"
+                      className="flex w-full items-start gap-3 rounded-lg border border-zinc-100 px-3 py-3 text-left hover:bg-zinc-50"
                     >
                       {content}
                     </button>
@@ -1407,7 +1410,7 @@ function SectionPanel({ section, role, chats, allChats, lessons, openChat, updat
                 return (
                   <div
                     key={lesson.id}
-                    className="flex w-full items-center gap-3 rounded-lg border border-zinc-100 px-3 py-3 text-left"
+                    className="flex w-full items-start gap-3 rounded-lg border border-zinc-100 px-3 py-3 text-left"
                   >
                     {content}
                   </div>
@@ -1423,7 +1426,7 @@ function SectionPanel({ section, role, chats, allChats, lessons, openChat, updat
   return (
     <section className="flex h-full min-h-0 flex-col bg-white">
       <PanelHeader title="Профіль" subtitle={role === "admin" ? "Адміністратор" : "Викладач"} back={back} />
-      <main className="grid flex-1 content-start gap-3 overflow-y-auto px-4 py-4">
+      <main className={`grid flex-1 content-start gap-3 overflow-y-auto px-4 py-4 ${role === "admin" ? SCROLL_SAFE_AREA_CLASS : ""}`}>
         <SummaryCard label="Усього чатів" value={allChats.length} />
         <SummaryCard label="Непрочитані" value={allChats.reduce((sum, chat) => sum + (chat.unread_count || 0), 0)} />
         <SummaryCard label="Чекають відповіді" value={allChats.filter((chat) => chat.waiting_reply).length} />
@@ -1477,7 +1480,7 @@ function AdminPanel({ role, chats, allChats, teachers, openChat, setActiveSectio
   return (
     <section className="flex h-full min-h-0 flex-col bg-white">
       <PanelHeader title="Адмін" subtitle={role === "admin" ? "Керування workspace" : "Доступ обмежено"} back={back} />
-      <main className="min-h-0 flex-1 overflow-y-auto bg-[#f6f7fb] px-4 py-4">
+      <main className={`min-h-0 flex-1 overflow-y-auto bg-[#f6f7fb] px-4 py-4 ${SCROLL_SAFE_AREA_CLASS}`}>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           <SummaryCard label="Усього чатів" value={allChats.length} />
           <SummaryCard label="Непрочитані" value={unreadChats.length} />

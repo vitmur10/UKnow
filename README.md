@@ -1,6 +1,26 @@
 🤖 UKnow School Telegram Bot — Архітектура Проекту
 Проект побудовано за модульною архітектурою (Domain-Driven Design), що дозволяє легко масштабувати бота, додавати нові функції та підтримувати код у чистоті.
 
+## Mini App: що важливо зараз
+
+- `miniapp/src/TeacherWorkspace.jsx`:
+  - адмінська вкладка тепер запам'ятовує останній відкритий розділ у `localStorage`
+  - polling bootstrap більше не перекидає адміна назад на дашборд
+  - адмінські екрани мають додатковий нижній safe-area відступ для Telegram WebView
+  - список уроків більше не обрізає довгі імена/учасників по правому краю
+
+- `backend/workspace/views.py` і `database/db_manager.py`:
+  - bootstrap повертає окремий список `lessons`
+  - роль `admin` приходить окремо і використовується фронтендом для відкриття `AdminPanel`
+  - Mini App дані викладача беруться не лише з `assignments`, а й з груп та уроків
+
+- VPS / Django:
+  - Django і бот мають дивитися в один і той самий `DB_NAME`, бажано абсолютний шлях
+  - для діагностики є команда:
+    - `python backend/manage.py miniapp_debug_user <TELEGRAM_ID>`
+  - якщо `backend/.env` містить інший `BOT_TOKEN`, Mini App auth через Telegram `initData` буде падати з `401`
+  - якщо немає `redis-server`, початковий bootstrap все одно має працювати, але live WebSocket updates можуть не працювати стабільно
+
 Нижче наведено детальний опис структури директорій та файлів:
 
 📁 1. config/ (Налаштування та константи)
