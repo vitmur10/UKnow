@@ -330,6 +330,9 @@ class Database:
         conn.close()
         return result
 
+    def get_db_path(self):
+        return self.db_name
+
     def get_active_teacher_ids_for_students(self, teacher_id):
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
@@ -653,12 +656,73 @@ class Database:
         if role and role[0] == "admin":
             conn.close()
             return True
-        cursor.execute('''SELECT 1 FROM assignments
-                          WHERE teacher_id = ? AND student_id = ? AND is_active = 1''',
-                       (teacher_id, student_id))
+        cursor.execute('''WITH teacher_students AS (
+                              SELECT student_id
+                              FROM assignments
+                              WHERE teacher_id = ? AND is_active = 1
+                              UNION
+                              SELECT gm.student_id
+                              FROM groups g
+                              JOIN group_members gm ON gm.group_id = g.id
+                              WHERE g.teacher_id = ?
+                                AND g.is_active = 1
+                                AND gm.is_active = 1
+                              UNION
+                              SELECT student_id
+                              FROM lessons
+                              WHERE teacher_id = ?
+                                AND student_id IS NOT NULL
+                              UNION
+                              SELECT gm.student_id
+                              FROM lessons l
+                              JOIN group_members gm ON gm.group_id = l.group_id
+                              WHERE l.teacher_id = ?
+                                AND l.group_id IS NOT NULL
+                                AND gm.is_active = 1
+                          )
+                          SELECT 1
+                          FROM teacher_students
+                          WHERE student_id = ?
+                          LIMIT 1''',
+                       (teacher_id, teacher_id, teacher_id, teacher_id, student_id))
         assigned = cursor.fetchone()
         conn.close()
         return bool(assigned)
+
+    def get_miniapp_student_ids_for_teacher(self, teacher_id):
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute('''WITH teacher_students AS (
+                              SELECT student_id
+                              FROM assignments
+                              WHERE teacher_id = ? AND is_active = 1
+                              UNION
+                              SELECT gm.student_id
+                              FROM groups g
+                              JOIN group_members gm ON gm.group_id = g.id
+                              WHERE g.teacher_id = ?
+                                AND g.is_active = 1
+                                AND gm.is_active = 1
+                              UNION
+                              SELECT student_id
+                              FROM lessons
+                              WHERE teacher_id = ?
+                                AND student_id IS NOT NULL
+                              UNION
+                              SELECT gm.student_id
+                              FROM lessons l
+                              JOIN group_members gm ON gm.group_id = l.group_id
+                              WHERE l.teacher_id = ?
+                                AND l.group_id IS NOT NULL
+                                AND gm.is_active = 1
+                          )
+                          SELECT DISTINCT student_id
+                          FROM teacher_students
+                          WHERE student_id IS NOT NULL''',
+                       (teacher_id, teacher_id, teacher_id, teacher_id))
+        result = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return result
 
     def get_miniapp_dialogs(self, teacher_id):
         """Список direct діалогів викладача для Mini App."""
@@ -667,7 +731,6 @@ class Database:
         cursor.execute("SELECT role FROM users WHERE user_id = ?", (teacher_id,))
         role_row = cursor.fetchone()
         is_admin = bool(role_row and role_row[0] == "admin")
-        student_ids = self.get_active_teacher_ids_for_students(teacher_id) if not is_admin else []
 
         if is_admin:
             cursor.execute('''WITH dialog_students AS (
@@ -715,13 +778,24 @@ class Database:
                                       u.learning_format, u.learning_goal, u.admin_note,
                                      t.first_name, t.last_name, a.teacher_id,
                                      COALESCE(m.is_deleted, 0), COALESCE(m.possible_contact, 0),
-                                     (SELECT l.lesson_date || ' ' || substr(l.lesson_time, 1, 5)
-                                      FROM lessons l
-                                      WHERE l.student_id = u.user_id
-                                        AND l.status = 'scheduled'
-                                        AND l.lesson_date >= date('now')
-                                      ORDER BY l.lesson_date ASC, l.lesson_time ASC
-                                      LIMIT 1)
+                                     (SELECT MIN(lesson_slot)
+                                      FROM (
+                                          SELECT l.lesson_date || ' ' || substr(l.lesson_time, 1, 5) AS lesson_slot
+                                          FROM lessons l
+                                          WHERE l.student_id = u.user_id
+                                            AND l.status = 'scheduled'
+                                            AND l.lesson_date >= date('now')
+                                          UNION ALL
+                                          SELECT l.lesson_date || ' ' || substr(l.lesson_time, 1, 5) AS lesson_slot
+                                          FROM lessons l
+                                          JOIN group_members gm ON gm.group_id = l.group_id
+                                          JOIN groups g ON g.id = l.group_id
+                                          WHERE gm.student_id = u.user_id
+                                            AND gm.is_active = 1
+                                            AND g.is_active = 1
+                                            AND l.status = 'scheduled'
+                                            AND l.lesson_date >= date('now')
+                                      ))
                               FROM dialog_students ds
                               JOIN users u ON u.user_id = ds.user_id
                               LEFT JOIN assignments a ON a.student_id = u.user_id AND a.is_active = 1
@@ -737,6 +811,25 @@ class Database:
                                   SELECT student_id AS user_id
                                   FROM assignments
                                   WHERE teacher_id = ? AND is_active = 1
+                                  UNION
+                                  SELECT gm.student_id AS user_id
+                                  FROM groups g
+                                  JOIN group_members gm ON gm.group_id = g.id
+                                  WHERE g.teacher_id = ?
+                                    AND g.is_active = 1
+                                    AND gm.is_active = 1
+                                  UNION
+                                  SELECT student_id AS user_id
+                                  FROM lessons
+                                  WHERE teacher_id = ?
+                                    AND student_id IS NOT NULL
+                                  UNION
+                                  SELECT gm.student_id AS user_id
+                                  FROM lessons l
+                                  JOIN group_members gm ON gm.group_id = l.group_id
+                                  WHERE l.teacher_id = ?
+                                    AND l.group_id IS NOT NULL
+                                    AND gm.is_active = 1
                               ),
                               last_messages AS (
                                   SELECT CASE
@@ -771,14 +864,26 @@ class Database:
                                      u.learning_format, u.learning_goal, u.admin_note,
                                      NULL, NULL, ?,
                                      COALESCE(m.is_deleted, 0), COALESCE(m.possible_contact, 0),
-                                     (SELECT l.lesson_date || ' ' || substr(l.lesson_time, 1, 5)
-                                      FROM lessons l
-                                      WHERE l.student_id = u.user_id
-                                        AND l.teacher_id = ?
-                                        AND l.status = 'scheduled'
-                                        AND l.lesson_date >= date('now')
-                                      ORDER BY l.lesson_date ASC, l.lesson_time ASC
-                                      LIMIT 1)
+                                     (SELECT MIN(lesson_slot)
+                                      FROM (
+                                          SELECT l.lesson_date || ' ' || substr(l.lesson_time, 1, 5) AS lesson_slot
+                                          FROM lessons l
+                                          WHERE l.student_id = u.user_id
+                                            AND l.teacher_id = ?
+                                            AND l.status = 'scheduled'
+                                            AND l.lesson_date >= date('now')
+                                          UNION ALL
+                                          SELECT l.lesson_date || ' ' || substr(l.lesson_time, 1, 5) AS lesson_slot
+                                          FROM lessons l
+                                          JOIN group_members gm ON gm.group_id = l.group_id
+                                          JOIN groups g ON g.id = l.group_id
+                                          WHERE gm.student_id = u.user_id
+                                            AND gm.is_active = 1
+                                            AND g.is_active = 1
+                                            AND l.teacher_id = ?
+                                            AND l.status = 'scheduled'
+                                            AND l.lesson_date >= date('now')
+                                      ))
                               FROM dialog_students ds
                               JOIN users u ON u.user_id = ds.user_id
                               LEFT JOIN last_messages lm ON lm.student_id = u.user_id
@@ -787,7 +892,7 @@ class Database:
                               WHERE u.is_active = 1
                               ORDER BY COALESCE(m.timestamp, '1970-01-01') DESC,
                                        u.first_name COLLATE NOCASE ASC''',
-                           (teacher_id, teacher_id, teacher_id, teacher_id))
+                           (teacher_id, teacher_id, teacher_id, teacher_id, teacher_id, teacher_id, teacher_id, teacher_id))
         result = cursor.fetchall()
         conn.close()
         return result
@@ -808,7 +913,7 @@ class Database:
             where += ''' AND (m.from_user_id = ? OR m.to_user_id = ?)'''
             params.extend([student_id, student_id])
         elif not is_admin:
-            student_ids = self.get_active_teacher_ids_for_students(teacher_id)
+            student_ids = self.get_miniapp_student_ids_for_teacher(teacher_id)
             if student_ids:
                 placeholders = ",".join(["?"] * len(student_ids))
                 where += f''' AND (m.from_user_id IN ({placeholders}) OR m.to_user_id IN ({placeholders}))'''
@@ -841,6 +946,76 @@ class Database:
                           ORDER BY m.timestamp DESC, m.id DESC
                           LIMIT ?''', params)
         result = list(reversed(cursor.fetchall()))
+        conn.close()
+        return result
+
+    def get_miniapp_lessons(self, viewer_id):
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute("SELECT role FROM users WHERE user_id = ? AND is_active = 1", (viewer_id,))
+        role_row = cursor.fetchone()
+        is_admin = bool(role_row and role_row[0] == "admin")
+
+        if is_admin:
+            cursor.execute('''SELECT l.id, l.teacher_id, l.student_id, l.group_id,
+                                     l.lesson_date, l.lesson_time, l.duration,
+                                     t.first_name, t.last_name,
+                                     s.first_name, s.last_name,
+                                     g.name,
+                                     (SELECT GROUP_CONCAT(TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')), ', ')
+                                      FROM group_members gm
+                                      JOIN users u ON u.user_id = gm.student_id
+                                      WHERE gm.group_id = l.group_id AND gm.is_active = 1)
+                              FROM lessons l
+                              LEFT JOIN users t ON t.user_id = l.teacher_id
+                              LEFT JOIN users s ON s.user_id = l.student_id
+                              LEFT JOIN groups g ON g.id = l.group_id
+                              WHERE l.status = 'scheduled'
+                                AND l.lesson_date >= date('now')
+                              ORDER BY l.lesson_date ASC, l.lesson_time ASC, l.id ASC''')
+        else:
+            cursor.execute('''SELECT l.id, l.teacher_id, l.student_id, l.group_id,
+                                     l.lesson_date, l.lesson_time, l.duration,
+                                     t.first_name, t.last_name,
+                                     s.first_name, s.last_name,
+                                     g.name,
+                                     (SELECT GROUP_CONCAT(TRIM(COALESCE(u.first_name, '') || ' ' || COALESCE(u.last_name, '')), ', ')
+                                      FROM group_members gm
+                                      JOIN users u ON u.user_id = gm.student_id
+                                      WHERE gm.group_id = l.group_id AND gm.is_active = 1)
+                              FROM lessons l
+                              LEFT JOIN users t ON t.user_id = l.teacher_id
+                              LEFT JOIN users s ON s.user_id = l.student_id
+                              LEFT JOIN groups g ON g.id = l.group_id
+                              WHERE l.teacher_id = ?
+                                AND l.status = 'scheduled'
+                                AND l.lesson_date >= date('now')
+                              ORDER BY l.lesson_date ASC, l.lesson_time ASC, l.id ASC''', (viewer_id,))
+
+        result = []
+        for row in cursor.fetchall():
+            lesson_id, teacher_id, student_id, group_id, lesson_date, lesson_time, duration, teacher_first, teacher_last, student_first, student_last, group_name, participant_names = row
+            scheduled_at = ""
+            if lesson_date and lesson_time:
+                scheduled_at = f"{lesson_date} {str(lesson_time)[:5]}"
+            teacher_name = f"{teacher_first or ''} {teacher_last or ''}".strip()
+            student_name = f"{student_first or ''} {student_last or ''}".strip()
+            is_group = bool(group_id)
+            result.append({
+                "id": lesson_id,
+                "teacher_id": teacher_id,
+                "teacher_name": teacher_name,
+                "student_id": student_id,
+                "group_id": group_id,
+                "kind": "group" if is_group else "direct",
+                "title": group_name or student_name or f"Урок #{lesson_id}",
+                "student_name": student_name,
+                "group_name": group_name or "",
+                "participants": participant_names or student_name or "",
+                "chat_id": student_id if student_id else None,
+                "scheduled_at": scheduled_at,
+                "duration": duration or 60,
+            })
         conn.close()
         return result
 

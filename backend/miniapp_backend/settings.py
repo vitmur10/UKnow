@@ -26,6 +26,9 @@ def sqlite_db_path():
         return str(path)
     return str(PROJECT_ROOT / path)
 
+
+SQLITE_DB_PATH = sqlite_db_path()
+
 INSTALLED_APPS = [
     "daphne",
     "django.contrib.contenttypes",
@@ -63,7 +66,7 @@ TEMPLATES = [
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": sqlite_db_path(),
+        "NAME": SQLITE_DB_PATH,
     }
 }
 
@@ -95,6 +98,7 @@ TEACHER_MINIAPP_IDS = {
     int(value) for value in os.getenv("TEACHER_MINIAPP_IDS", "").split(",") if value.strip()
 }
 MINIAPP_DEV_TEACHER_ID = int(os.getenv("MINIAPP_DEV_TEACHER_ID", "0") or "0")
+MINIAPP_DEV_USER_ID = int(os.getenv("MINIAPP_DEV_USER_ID", str(MINIAPP_DEV_TEACHER_ID)) or "0")
 
 CORS_ALLOWED_ORIGINS = [
     origin.strip() for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if origin.strip()

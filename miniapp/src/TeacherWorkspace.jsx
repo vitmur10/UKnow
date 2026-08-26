@@ -41,6 +41,7 @@ export default function TeacherWorkspace() {
   const [role, setRole] = useState("teacher");
   const [wsToken, setWsToken] = useState("");
   const [chats, setChats] = useState([]);
+  const [lessons, setLessons] = useState([]);
   const [teachers, setTeachers] = useState([]);
   const [messages, setMessages] = useState([]);
   const [selectedChatId, setSelectedChatId] = useState(null);
@@ -54,6 +55,7 @@ export default function TeacherWorkspace() {
   const [recording, setRecording] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
+  const [authError, setAuthError] = useState("");
   const [replyingTo, setReplyingTo] = useState(null);
   const [editingMessage, setEditingMessage] = useState(null);
   const [infoOpen, setInfoOpen] = useState(false);
@@ -144,9 +146,10 @@ export default function TeacherWorkspace() {
           body: new URLSearchParams({ initData }),
         });
 
-        if (!response.ok) throw new Error("auth failed");
+        if (!response.ok) throw new Error(await readApiError(response, "Помилка авторизації Mini App"));
         const { ws_token } = await response.json();
         setWsToken(ws_token);
+        setAuthError("");
         if (cancelled) return;
 
         const bootstrapResponse = await fetch(`${API_BASE}/miniapp/bootstrap/`, {
@@ -154,21 +157,22 @@ export default function TeacherWorkspace() {
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams({ token: ws_token }),
         });
-        if (bootstrapResponse.ok) {
-          const bootstrap = await bootstrapResponse.json();
-          const initialChatId = chatIdFromStartParam(startParam);
-          setRole(bootstrap.role || "teacher");
-          setChats(bootstrap.chats || []);
-          setTeachers(bootstrap.teachers || []);
-          setMessages(bootstrap.messages || []);
-          if (bootstrap.role === "admin") {
-            setActiveSection("admin");
-          }
-          if (initialChatId) setSelectedChatId(initialChatId);
+        if (!bootstrapResponse.ok) throw new Error(await readApiError(bootstrapResponse, "Не вдалося завантажити Mini App"));
+        const bootstrap = await bootstrapResponse.json();
+        const initialChatId = chatIdFromStartParam(startParam);
+        setRole(bootstrap.role || "teacher");
+        setChats(bootstrap.chats || []);
+        setLessons(bootstrap.lessons || []);
+        setTeachers(bootstrap.teachers || []);
+        setMessages(bootstrap.messages || []);
+        if (bootstrap.role === "admin") {
+          setActiveSection("admin");
         }
+        if (initialChatId) setSelectedChatId(initialChatId);
 
         openSocket(ws_token);
-      } catch {
+      } catch (error) {
+        setAuthError(error.message || "Не вдалося відкрити Mini App");
         setStatus("offline");
       }
     }
@@ -194,12 +198,19 @@ export default function TeacherWorkspace() {
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams({ token: wsToken }),
         });
+        if (response.status === 401 || response.status === 403) {
+          setAuthError(await readApiError(response, "Доступ до Mini App відхилено"));
+          setStatus("offline");
+          return;
+        }
         if (!response.ok || cancelled) return;
         const payload = await response.json();
         setRole(payload.role || "teacher");
         setChats(payload.chats || []);
+        setLessons(payload.lessons || []);
         setTeachers(payload.teachers || []);
         setMessages(payload.messages || []);
+        setAuthError("");
         if (payload.role === "admin" && activeSection === "chats" && !selectedChatIdRef.current) {
           setActiveSection("admin");
         }
@@ -229,6 +240,7 @@ export default function TeacherWorkspace() {
     if (data.type === "chat.history") {
       setChats(data.chats || []);
       setMessages(data.messages || []);
+      setLessons(data.lessons || []);
       return;
     }
 
@@ -503,7 +515,7 @@ export default function TeacherWorkspace() {
           hiddenOnMobile={Boolean(selectedChatId) || activeSection !== "chats"}
         />
 
-        {activeSection === "admin" ? <AdminPanel
+        {authError ? <ErrorPanel message={authError} /> : activeSection === "admin" ? <AdminPanel
           role={role}
           chats={chats}
           allChats={chats}
@@ -546,6 +558,7 @@ export default function TeacherWorkspace() {
             role={role}
             chats={filteredChats}
             allChats={chats}
+            lessons={lessons}
             openChat={openChat}
             updateStudent={updateStudent}
             back={() => setActiveSection("chats")}
@@ -1292,10 +1305,27 @@ function EmptyState({ text }) {
   return <div className="grid h-full place-items-center text-sm text-zinc-500">{text}</div>;
 }
 
-function SectionPanel({ section, role, chats, allChats, openChat, updateStudent, back }) {
+function ErrorPanel({ message }) {
+  return (
+    <section className="flex h-full min-h-0 flex-col bg-white">
+      <main className="grid flex-1 place-items-center px-6 py-8">
+        <div className="max-w-md rounded-xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-700">
+          <div className="flex items-start gap-3">
+            <AlertTriangle size={18} className="mt-0.5 shrink-0" />
+            <div className="space-y-1">
+              <p className="font-semibold">Mini App недоступна</p>
+              <p>{message}</p>
+            </div>
+          </div>
+        </div>
+      </main>
+    </section>
+  );
+}
+
+function SectionPanel({ section, role, chats, allChats, lessons, openChat, updateStudent, back }) {
   const activeStudents = allChats.filter((chat) => !chat.is_archived);
   const archivedStudents = allChats.filter((chat) => chat.is_archived);
-  const lessons = allChats.filter((chat) => chat.next_lesson).sort((a, b) => String(a.next_lesson).localeCompare(String(b.next_lesson)));
 
   if (section === "students") {
     return (
@@ -1348,20 +1378,37 @@ function SectionPanel({ section, role, chats, allChats, openChat, updateStudent,
         <main className="flex-1 overflow-y-auto px-4 py-4">
           {!lessons.length ? <EmptyState text="Запланованих уроків не знайдено" /> : (
             <div className="space-y-2">
-              {lessons.map((chat) => (
-                <button
-                  key={chat.id}
-                  onClick={() => openChat(chat.id)}
-                  className="flex w-full items-center gap-3 rounded-lg border border-zinc-100 px-3 py-3 text-left hover:bg-zinc-50"
-                >
+              {lessons.map((lesson) => {
+                const content = (
+                  <>
                   <CalendarDays size={20} className="text-[#0c99c9]" />
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold">{chat.title}</p>
-                    <p className="text-xs text-zinc-500">{formatDateTime(chat.next_lesson)}</p>
+                    <p className="truncate text-sm font-semibold">{lesson.title}</p>
+                    <p className="text-xs text-zinc-500">{formatDateTime(lesson.scheduled_at)}</p>
                   </div>
-                  <span className="truncate text-xs text-zinc-500">{chat.learning_goal || chat.language}</span>
-                </button>
-              ))}
+                  <span className="truncate text-xs text-zinc-500">{lesson.kind === "group" ? (lesson.participants || "Група") : (lesson.student_name || "Індивідуально")}</span>
+                  </>
+                );
+                if (lesson.chat_id) {
+                  return (
+                    <button
+                      key={lesson.id}
+                      onClick={() => openChat(lesson.chat_id)}
+                      className="flex w-full items-center gap-3 rounded-lg border border-zinc-100 px-3 py-3 text-left hover:bg-zinc-50"
+                    >
+                      {content}
+                    </button>
+                  );
+                }
+                return (
+                  <div
+                    key={lesson.id}
+                    className="flex w-full items-center gap-3 rounded-lg border border-zinc-100 px-3 py-3 text-left"
+                  >
+                    {content}
+                  </div>
+                );
+              })}
             </div>
           )}
         </main>
@@ -1381,6 +1428,18 @@ function SectionPanel({ section, role, chats, allChats, openChat, updateStudent,
       </main>
     </section>
   );
+}
+
+async function readApiError(response, fallbackMessage) {
+  try {
+    const payload = await response.json();
+    if (payload?.error) return payload.error;
+  } catch {
+    // ignore malformed error payloads
+  }
+  if (response.status === 401) return "Потрібна повторна авторизація в Telegram";
+  if (response.status === 403) return "Немає доступу до Mini App для цього акаунта";
+  return fallbackMessage;
 }
 
 function AdminPanel({ role, chats, allChats, teachers, openChat, setActiveSection, back }) {

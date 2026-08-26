@@ -43,6 +43,7 @@ class TeacherChatConsumer(AsyncJsonWebsocketConsumer):
             "type": "chat.history",
             "chats": await self.get_dialogs(),
             "messages": await self.get_history(),
+            "lessons": await self.get_lessons(),
         })
 
     async def disconnect(self, close_code):
@@ -258,3 +259,7 @@ class TeacherChatConsumer(AsyncJsonWebsocketConsumer):
         teacher = db.get_user(self.teacher_tg_id)
         viewer_role = teacher[4] if teacher else "teacher"
         return [message_payload(row, self.teacher_tg_id, viewer_role) for row in db.get_miniapp_history(self.teacher_tg_id)]
+
+    @sync_to_async
+    def get_lessons(self):
+        return db.get_miniapp_lessons(self.teacher_tg_id)

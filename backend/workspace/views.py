@@ -22,11 +22,11 @@ from .sqlite_payloads import dialog_payload, message_payload
 @require_POST
 def miniapp_auth(request):
     init_data = request.POST.get("initData", "")
-    if settings.DEBUG and not init_data and getattr(settings, "MINIAPP_DEV_TEACHER_ID", None):
-        teacher_id = settings.MINIAPP_DEV_TEACHER_ID
-        user = db.get_user(teacher_id)
+    if settings.DEBUG and not init_data and getattr(settings, "MINIAPP_DEV_USER_ID", None):
+        dev_user_id = settings.MINIAPP_DEV_USER_ID
+        user = db.get_user(dev_user_id)
         if user and user[4] in ("teacher", "admin") and bool(user[9]):
-            return JsonResponse({"ws_token": issue_ws_token(teacher_id)})
+            return JsonResponse({"ws_token": issue_ws_token(dev_user_id), "dev_user_id": dev_user_id})
 
     try:
         payload = validate_telegram_init_data(init_data)
@@ -59,6 +59,7 @@ def miniapp_bootstrap(request):
 
     dialogs = [dialog_payload(row) for row in db.get_miniapp_dialogs(teacher_id)]
     messages = [message_payload(row, teacher_id, user[4]) for row in db.get_miniapp_history(teacher_id)]
+    lessons = db.get_miniapp_lessons(teacher_id)
     teachers = [
         {"id": row[0], "name": f"{row[2]} {row[3]}".strip() or row[1] or str(row[0])}
         for row in db.get_users_by_role("teacher")
@@ -68,7 +69,9 @@ def miniapp_bootstrap(request):
         "user_id": teacher_id,
         "chats": dialogs,
         "messages": messages,
+        "lessons": lessons,
         "teachers": teachers,
+        "db_path": db.get_db_path(),
     })
 
 
@@ -92,6 +95,7 @@ def _broadcast_miniapp_state(viewer_id):
         "type": "chat.history",
         "chats": [dialog_payload(row) for row in db.get_miniapp_dialogs(viewer_id)],
         "messages": [message_payload(row, viewer_id, viewer[4]) for row in db.get_miniapp_history(viewer_id)],
+        "lessons": db.get_miniapp_lessons(viewer_id),
     }
     async_to_sync(channel_layer.group_send)(
         f"teacher_{viewer_id}",
