@@ -9,6 +9,7 @@ from workspace.views import (
     message_voice,
     miniapp_auth,
     miniapp_bootstrap,
+    miniapp_chat_history,
     miniapp_delete_message,
     miniapp_mark_read,
     miniapp_message_edits,
@@ -27,6 +28,7 @@ def miniapp_index(request):
 urlpatterns = [
     path("api/miniapp/auth/", miniapp_auth, name="miniapp-auth"),
     path("api/miniapp/bootstrap/", miniapp_bootstrap, name="miniapp-bootstrap"),
+    path("api/miniapp/chat/history/", miniapp_chat_history, name="miniapp-chat-history"),
     path("api/miniapp/student/update/", miniapp_update_student, name="miniapp-update-student"),
     path("api/miniapp/message/edits/", miniapp_message_edits, name="miniapp-message-edits"),
     path("api/miniapp/chat/read/", miniapp_mark_read, name="miniapp-mark-read"),

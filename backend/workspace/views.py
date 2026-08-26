@@ -108,6 +108,26 @@ def _broadcast_miniapp_state(viewer_id):
 
 @csrf_exempt
 @require_POST
+def miniapp_chat_history(request):
+    try:
+        user_id, user = _require_miniapp_user(request)
+    except Exception:
+        return JsonResponse({"error": "Unauthorized"}, status=401)
+
+    try:
+        student_id = int(request.POST.get("student_id", "0"))
+    except ValueError:
+        return JsonResponse({"error": "Invalid student_id"}, status=400)
+
+    if user[4] != "admin" and not db.teacher_can_access_student(user_id, student_id):
+        return JsonResponse({"error": "Forbidden"}, status=403)
+
+    messages = [message_payload(row, user_id, user[4]) for row in db.get_miniapp_history(user_id, student_id=student_id)]
+    return JsonResponse({"messages": messages, "student_id": student_id})
+
+
+@csrf_exempt
+@require_POST
 def miniapp_update_student(request):
     try:
         user_id, user = _require_miniapp_user(request)

@@ -108,7 +108,7 @@ export default function TeacherWorkspace() {
   const visibleMessages = useMemo(() => {
     const value = messageQuery.trim().toLowerCase();
     return messages.filter((message) => {
-      if (message.chat_id !== selectedChatId) return false;
+      if (String(message.chat_id) !== String(selectedChatId)) return false;
       if (!value) return true;
       return `${message.text} ${message.original_text} ${message.filename} ${message.sender_name}`.toLowerCase().includes(value);
     });
@@ -329,6 +329,7 @@ export default function TeacherWorkspace() {
     setInfoOpen(false);
     setReplyingTo(null);
     setEditingMessage(null);
+    loadChatHistory(chatId);
     wsRef.current?.send(JSON.stringify({ type: "chat.read", chat_id: chatId }));
     persistChatRead(chatId);
   }
@@ -496,6 +497,22 @@ export default function TeacherWorkspace() {
     if (!response.ok) return [];
     const payload = await response.json();
     return payload.edits || [];
+  }
+
+  async function loadChatHistory(chatId) {
+    if (!wsToken) return;
+    const response = await fetch(`${API_BASE}/miniapp/chat/history/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: wsToken, student_id: String(chatId) }),
+    });
+    if (!response.ok) return;
+    const payload = await response.json();
+    const history = payload.messages || [];
+    setMessages((current) => {
+      const preserved = current.filter((message) => String(message.chat_id) !== String(chatId));
+      return [...preserved, ...history];
+    });
   }
 
   return (
@@ -678,7 +695,9 @@ function ChatList({
         {chats.map((chat, index) => (
           <button
             key={chat.id}
-            onClick={() => openChat(chat.id)}
+            onClick={() => {
+              openChat(chat.id);
+            }}
             className={[
               "relative flex w-full items-center gap-3 border-b border-zinc-100 px-5 py-3.5 text-left transition",
               selectedChatId === chat.id ? "bg-zinc-50" : "bg-white hover:bg-zinc-50",
