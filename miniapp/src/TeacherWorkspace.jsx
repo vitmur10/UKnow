@@ -30,6 +30,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 const API_BASE = import.meta.env.VITE_API_BASE || `${window.location.origin}/api`;
 const WS_BASE = import.meta.env.VITE_WS_BASE || `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}`;
+const ADMIN_SECTION_STORAGE_KEY = "uknow-miniapp-admin-section";
 const FILTERS = [
   { id: "all", label: "Усі" },
   { id: "unread", label: "Непрочитані" },
@@ -117,6 +118,12 @@ export default function TeacherWorkspace() {
   }, [selectedChatId]);
 
   useEffect(() => {
+    if (role !== "admin") return;
+    if (!isAdminSection(activeSection)) return;
+    window.localStorage.setItem(ADMIN_SECTION_STORAGE_KEY, activeSection);
+  }, [activeSection, role]);
+
+  useEffect(() => {
     let cancelled = false;
     let reconnectTimer = null;
 
@@ -166,7 +173,7 @@ export default function TeacherWorkspace() {
         setTeachers(bootstrap.teachers || []);
         setMessages(bootstrap.messages || []);
         if (bootstrap.role === "admin") {
-          setActiveSection("admin");
+          setActiveSection(getStoredAdminSection());
         }
         if (initialChatId) setSelectedChatId(initialChatId);
 
@@ -211,9 +218,6 @@ export default function TeacherWorkspace() {
         setTeachers(payload.teachers || []);
         setMessages(payload.messages || []);
         setAuthError("");
-        if (payload.role === "admin" && activeSection === "chats" && !selectedChatIdRef.current) {
-          setActiveSection("admin");
-        }
       } catch {
         // WebSocket remains the primary channel; polling is only a quiet fallback.
       }
@@ -1440,6 +1444,15 @@ async function readApiError(response, fallbackMessage) {
   if (response.status === 401) return "Потрібна повторна авторизація в Telegram";
   if (response.status === 403) return "Немає доступу до Mini App для цього акаунта";
   return fallbackMessage;
+}
+
+function getStoredAdminSection() {
+  const value = window.localStorage.getItem(ADMIN_SECTION_STORAGE_KEY);
+  return isAdminSection(value) ? value : "admin";
+}
+
+function isAdminSection(value) {
+  return ["admin", "chats", "students", "lessons", "profile"].includes(value);
 }
 
 function AdminPanel({ role, chats, allChats, teachers, openChat, setActiveSection, back }) {
