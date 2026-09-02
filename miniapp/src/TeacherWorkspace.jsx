@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Check,
   Copy,
+  Download,
   FileText,
   Image,
   Info,
@@ -38,6 +39,12 @@ const FILTERS = [
   { id: "waiting", label: "Чекають відповіді" },
   { id: "archive", label: "Архів" },
 ];
+const LESSON_FILTERS = [
+  { id: "today", label: "Сьогодні" },
+  { id: "week", label: "Тиждень" },
+  { id: "calendar", label: "Календар" },
+  { id: "all", label: "Усі" },
+];
 
 export default function TeacherWorkspace() {
   const [role, setRole] = useState("teacher");
@@ -52,6 +59,7 @@ export default function TeacherWorkspace() {
   const [messageQuery, setMessageQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState("all");
   const [teacherFilter, setTeacherFilter] = useState("all");
+  const [lessonFilter, setLessonFilter] = useState("week");
   const [text, setText] = useState("");
   const [status, setStatus] = useState("connecting");
   const [recording, setRecording] = useState(false);
@@ -544,6 +552,8 @@ export default function TeacherWorkspace() {
           teachers={teacherOptions}
           openChat={openChat}
           setActiveSection={setActiveSection}
+          setTeacherFilter={setTeacherFilter}
+          setActiveFilter={setActiveFilter}
           back={() => setActiveSection("chats")}
         /> : activeSection === "chats" ? <ChatPanel
           role={role}
@@ -581,6 +591,9 @@ export default function TeacherWorkspace() {
             chats={filteredChats}
             allChats={chats}
             lessons={lessons}
+            teachers={teacherOptions}
+            lessonFilter={lessonFilter}
+            setLessonFilter={setLessonFilter}
             openChat={openChat}
             updateStudent={updateStudent}
             back={() => setActiveSection("chats")}
@@ -871,14 +884,24 @@ function ChatPanel({
       )}
 
       {role !== "admin" || adminTab === "dialog" ? <div className="border-b border-zinc-100 px-4 py-2">
-        <div className="flex h-9 items-center gap-2 rounded-lg bg-[#eef0f3] px-3 text-zinc-500">
-          <Search size={16} />
-          <input
-            value={messageQuery}
-            onChange={(event) => setMessageQuery(event.target.value)}
-            className="min-w-0 flex-1 bg-transparent text-sm outline-none"
-            placeholder="Пошук у чаті"
-          />
+        <div className="flex items-center gap-2">
+          <div className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg bg-[#eef0f3] px-3 text-zinc-500">
+            <Search size={16} />
+            <input
+              value={messageQuery}
+              onChange={(event) => setMessageQuery(event.target.value)}
+              className="min-w-0 flex-1 bg-transparent text-sm outline-none"
+              placeholder="Пошук у чаті"
+            />
+          </div>
+          <button
+            onClick={() => downloadChatHistory(chat, messages)}
+            disabled={!messages.length}
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-zinc-100 text-zinc-700 hover:bg-zinc-200 disabled:opacity-40"
+            title="Завантажити історію"
+          >
+            <Download size={17} />
+          </button>
         </div>
       </div> : null}
 
@@ -1349,49 +1372,98 @@ function ErrorPanel({ message }) {
   );
 }
 
-function SectionPanel({ section, role, chats, allChats, lessons, openChat, updateStudent, back }) {
+function SectionPanel({ section, role, chats, allChats, lessons, teachers, lessonFilter, setLessonFilter, openChat, updateStudent, back }) {
+  const [userView, setUserView] = useState("students");
+  const [calendarDate, setCalendarDate] = useState(todayInputValue());
   const activeStudents = allChats.filter((chat) => !chat.is_archived);
   const archivedStudents = allChats.filter((chat) => chat.is_archived);
+  const unreadTotal = allChats.reduce((sum, chat) => sum + (chat.unread_count || 0), 0);
+  const waitingCount = allChats.filter((chat) => chat.waiting_reply).length;
+  const contactCount = allChats.filter((chat) => chat.possible_contact).length;
+  const visibleLessons = lessons.filter((lesson) => lessonMatchesFilter(lesson, lessonFilter, calendarDate));
+  const assignedTeacherCount = new Set(allChats.map((chat) => chat.teacher_id).filter(Boolean)).size;
 
   if (section === "students") {
+    const showStudents = userView === "students" || userView === "all";
+    const showTeachers = role === "admin" && (userView === "teachers" || userView === "all");
     return (
       <section className="flex h-full min-h-0 flex-col bg-white">
-        <PanelHeader title="Учні" subtitle={`${activeStudents.length} активних · ${archivedStudents.length} в архіві`} back={back} />
+        <PanelHeader
+          title={role === "admin" ? "Користувачі" : "Учні"}
+          subtitle={role === "admin" ? `${activeStudents.length} активних · ${teachers.length} викладачів` : `${activeStudents.length} активних · ${archivedStudents.length} в архіві`}
+          back={back}
+        />
         <main className={`flex-1 overflow-y-auto px-4 py-4 ${role === "admin" ? SCROLL_SAFE_AREA_CLASS : ""}`}>
-          <div className="grid gap-2">
-            {allChats.map((chat) => (
-              <div key={chat.id} className="rounded-lg border border-zinc-100 px-3 py-3">
-                <div className="flex items-center gap-3">
-                  <Avatar initials={chat.initials} size="sm" tone={chat.is_archived ? "yellow" : "blue"} />
-                  <button onClick={() => openChat(chat.id)} className="min-w-0 flex-1 text-left">
-                    <p className="truncate text-sm font-semibold">{chat.title}</p>
-                    <p className="truncate text-xs text-zinc-500">{[chat.language, chat.level, statusLabel(chat.student_status)].filter(Boolean).join(" · ")}</p>
-                  </button>
-                  {chat.waiting_reply && <span className="rounded-full bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-700">Відповісти</span>}
-                </div>
-                {role === "admin" && (
-                  <div className="mt-3 grid grid-cols-3 gap-0.5">
-                    {[
-                      ["active", "Активний", "Актив."],
-                      ["paused", "Пауза", "Пауза"],
-                      ["completed", "Завершив", "Архів"],
-                    ].map(([value, label, mobileLabel]) => (
-                      <button
-                        key={value}
-                        onClick={() => updateStudent(chat.id, { student_status: value })}
-                        className={[
-                          "h-6 min-w-0 rounded-md px-0.5 text-[10px] font-medium leading-none tracking-normal",
-                          chat.student_status === value ? "bg-[#0c99c9] text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200",
-                        ].join(" ")}
-                      >
-                        <span className="sm:hidden">{mobileLabel}</span>
-                        <span className="hidden sm:inline">{label}</span>
+          {role === "admin" && (
+            <div className="mb-3 grid grid-cols-3 gap-1 rounded-lg bg-zinc-100 p-1 text-xs font-semibold">
+              {[
+                ["students", "Учні"],
+                ["teachers", "Викладачі"],
+                ["all", "Усі"],
+              ].map(([id, label]) => (
+                <button
+                  key={id}
+                  onClick={() => setUserView(id)}
+                  className={["h-8 rounded-md", userView === id ? "bg-white text-[#0c99c9] shadow-sm" : "text-zinc-600"].join(" ")}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="grid gap-3">
+            {showStudents && (
+              <div className="grid gap-2">
+                {role === "admin" && <p className="text-xs font-semibold uppercase text-zinc-400">Учні</p>}
+                {allChats.map((chat) => (
+                  <div key={chat.id} className="rounded-lg border border-zinc-100 px-3 py-3">
+                    <div className="flex items-center gap-3">
+                      <Avatar initials={chat.initials} size="sm" tone={chat.is_archived ? "yellow" : "blue"} />
+                      <button onClick={() => openChat(chat.id)} className="min-w-0 flex-1 text-left">
+                        <p className="truncate text-sm font-semibold">{chat.title}</p>
+                        <p className="truncate text-xs text-zinc-500">{[chat.language, chat.level, chat.teacher_name || "без викладача", statusLabel(chat.student_status)].filter(Boolean).join(" · ")}</p>
                       </button>
-                    ))}
+                      {chat.waiting_reply && <span className="rounded-full bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-700">Відповісти</span>}
+                    </div>
+                    {role === "admin" && (
+                      <div className="mt-3 grid grid-cols-3 gap-0.5">
+                        {[
+                          ["active", "Активний", "Актив."],
+                          ["paused", "Пауза", "Пауза"],
+                          ["completed", "Завершив", "Архів"],
+                        ].map(([value, label, mobileLabel]) => (
+                          <button
+                            key={value}
+                            onClick={() => updateStudent(chat.id, { student_status: value })}
+                            className={[
+                              "h-6 min-w-0 rounded-md px-0.5 text-[10px] font-medium leading-none tracking-normal",
+                              chat.student_status === value ? "bg-[#0c99c9] text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200",
+                            ].join(" ")}
+                          >
+                            <span className="sm:hidden">{mobileLabel}</span>
+                            <span className="hidden sm:inline">{label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                )}
+                ))}
               </div>
-            ))}
+            )}
+            {showTeachers && (
+              <div className="grid gap-2">
+                <p className="text-xs font-semibold uppercase text-zinc-400">Викладачі</p>
+                {teachers.map((teacher) => {
+                  const teacherStudents = allChats.filter((chat) => String(chat.teacher_id || "") === String(teacher.id));
+                  return (
+                    <div key={teacher.id} className="rounded-lg border border-zinc-100 px-3 py-3">
+                      <p className="truncate text-sm font-semibold">{teacher.name}</p>
+                      <p className="mt-1 text-xs text-zinc-500">{teacherStudents.length} учнів · {teacherStudents.filter((chat) => chat.waiting_reply).length} чекають відповіді</p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </main>
       </section>
@@ -1401,17 +1473,42 @@ function SectionPanel({ section, role, chats, allChats, lessons, openChat, updat
   if (section === "lessons") {
     return (
       <section className="flex h-full min-h-0 flex-col bg-white">
-        <PanelHeader title="Уроки" subtitle={`${lessons.length} заплановано`} back={back} />
+        <PanelHeader title="Уроки" subtitle={`${visibleLessons.length} з ${lessons.length} заплановано`} back={back} />
         <main className={`flex-1 overflow-y-auto px-4 py-4 ${role === "admin" ? SCROLL_SAFE_AREA_CLASS : ""}`}>
-          {!lessons.length ? <EmptyState text="Запланованих уроків не знайдено" /> : (
+          <div className="mb-3 flex gap-1 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {LESSON_FILTERS.map((filter) => (
+              <button
+                key={filter.id}
+                onClick={() => setLessonFilter(filter.id)}
+                className={[
+                  "h-8 shrink-0 rounded-full px-3 text-xs font-semibold",
+                  lessonFilter === filter.id ? "bg-[#0c99c9] text-white" : "bg-zinc-100 text-zinc-700 hover:bg-zinc-200",
+                ].join(" ")}
+              >
+                {filter.label}
+              </button>
+            ))}
+          </div>
+          {lessonFilter === "calendar" && (
+            <label className="mb-3 grid gap-1 text-xs text-zinc-500">
+              Дата
+              <input
+                type="date"
+                value={calendarDate}
+                onChange={(event) => setCalendarDate(event.target.value)}
+                className="h-10 rounded-lg border border-zinc-200 px-3 text-sm text-zinc-800 outline-none"
+              />
+            </label>
+          )}
+          {!visibleLessons.length ? <EmptyState text="Запланованих уроків за цим фільтром не знайдено" /> : (
             <div className="space-y-2">
-              {lessons.map((lesson) => {
+              {visibleLessons.map((lesson) => {
                 const content = (
                   <>
                   <CalendarDays size={20} className="text-[#0c99c9]" />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-semibold">{lesson.title}</p>
-                    <p className="text-xs text-zinc-500">{formatDateTime(lesson.scheduled_at)}</p>
+                    <p className="text-xs text-zinc-500">{formatDateTime(lesson.scheduled_at)}{role === "admin" && lesson.teacher_name ? ` · ${lesson.teacher_name}` : ""}</p>
                   </div>
                   <span className="min-w-0 max-w-[42%] shrink text-right text-xs leading-4 text-zinc-500 break-words">
                     {lesson.kind === "group" ? (lesson.participants || "Група") : (lesson.student_name || "Індивідуально")}
@@ -1447,13 +1544,16 @@ function SectionPanel({ section, role, chats, allChats, lessons, openChat, updat
 
   return (
     <section className="flex h-full min-h-0 flex-col bg-white">
-      <PanelHeader title="Профіль" subtitle={role === "admin" ? "Адміністратор" : "Викладач"} back={back} />
+      <PanelHeader title={role === "admin" ? "Звіти" : "Статистика"} subtitle={role === "admin" ? "Адміністратор" : "Викладач"} back={back} />
       <main className={`grid flex-1 content-start gap-3 overflow-y-auto px-4 py-4 ${role === "admin" ? SCROLL_SAFE_AREA_CLASS : ""}`}>
-        <SummaryCard label="Усього чатів" value={allChats.length} />
-        <SummaryCard label="Непрочитані" value={allChats.reduce((sum, chat) => sum + (chat.unread_count || 0), 0)} />
-        <SummaryCard label="Чекають відповіді" value={allChats.filter((chat) => chat.waiting_reply).length} />
+        <SummaryCard label="Активні учні" value={activeStudents.length} />
+        <SummaryCard label="Непрочитані" value={unreadTotal} />
+        <SummaryCard label="Чекають відповіді" value={waitingCount} />
+        <SummaryCard label="Заплановано уроків" value={lessons.length} />
         <SummaryCard label="Архів" value={archivedStudents.length} />
-        {role === "admin" && <SummaryCard label="Контактні попередження" value={allChats.filter((chat) => chat.possible_contact).length} />}
+        {role === "admin" && <SummaryCard label="Викладачів з учнями" value={assignedTeacherCount} />}
+        {role === "admin" && <SummaryCard label="Усього викладачів" value={teachers.length} />}
+        {role === "admin" && <SummaryCard label="Контактні попередження" value={contactCount} />}
       </main>
     </section>
   );
@@ -1480,7 +1580,7 @@ function isAdminSection(value) {
   return ["admin", "chats", "students", "lessons", "profile"].includes(value);
 }
 
-function AdminPanel({ role, chats, allChats, teachers, openChat, setActiveSection, back }) {
+function AdminPanel({ role, chats, allChats, teachers, openChat, setActiveSection, setTeacherFilter, setActiveFilter, back }) {
   const unreadChats = allChats.filter((chat) => (chat.unread_count || 0) > 0);
   const waitingChats = allChats.filter((chat) => chat.waiting_reply);
   const contactChats = allChats.filter((chat) => chat.possible_contact);
@@ -1517,9 +1617,9 @@ function AdminPanel({ role, chats, allChats, teachers, openChat, setActiveSectio
           <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
             {[
               ["chats", "Чати"],
-              ["students", "Учні"],
+              ["students", "Користувачі"],
               ["lessons", "Уроки"],
-              ["profile", "Профіль"],
+              ["profile", "Звіти"],
             ].map(([id, label]) => (
               <button
                 key={id}
@@ -1529,6 +1629,32 @@ function AdminPanel({ role, chats, allChats, teachers, openChat, setActiveSectio
                 {label}
               </button>
             ))}
+          </div>
+        </div>
+
+        <div className="mt-4 rounded-lg border border-zinc-100 bg-white px-4 py-4">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-semibold text-zinc-800">Переписки по викладачу</p>
+            <span className="text-xs text-zinc-500">{teachers.length}</span>
+          </div>
+          <div className="mt-3 grid gap-2">
+            {teachers.map((teacher) => {
+              const teacherChats = allChats.filter((chat) => String(chat.teacher_id || "") === String(teacher.id));
+              return (
+                <button
+                  key={teacher.id}
+                  onClick={() => {
+                    setTeacherFilter(String(teacher.id));
+                    setActiveFilter("all");
+                    setActiveSection("chats");
+                  }}
+                  className="flex h-10 items-center justify-between gap-3 rounded-lg bg-zinc-100 px-3 text-left text-sm font-semibold text-zinc-700 hover:bg-zinc-200"
+                >
+                  <span className="truncate">{teacher.name}</span>
+                  <span className="shrink-0 text-xs text-zinc-500">{teacherChats.length}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -1725,6 +1851,33 @@ function compareMessages(a, b) {
   return Number(a.id || 0) - Number(b.id || 0);
 }
 
+function downloadChatHistory(chat, messages) {
+  const lines = [
+    `Історія переписки: ${chat?.title || "Чат"}`,
+    `Експорт: ${new Date().toLocaleString()}`,
+    "",
+    ...[...messages].sort(compareMessages).map((message) => {
+      const sender = message.sender_name || (message.sender_kind === "teacher" ? "Викладач" : "Учень");
+      const body = message.original_text || message.text || message.filename || mediaLabel(message.kind);
+      const flags = [
+        message.is_deleted ? "видалено" : "",
+        message.edited_at ? "редаговано" : "",
+        message.possible_contact ? "можливі контакти" : "",
+      ].filter(Boolean);
+      return `[${formatDateTime(message.created_at)}] ${sender}: ${body}${flags.length ? ` (${flags.join(", ")})` : ""}`;
+    }),
+  ];
+  const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `chat-${chat?.id || "history"}.txt`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 function mediaLabel(kind) {
   return {
     photo: "Фото",
@@ -1748,6 +1901,45 @@ function statusLabel(status) {
     paused: "Пауза",
     completed: "Завершив навчання",
   }[status] || status;
+}
+
+function lessonMatchesFilter(lesson, filter, calendarDate) {
+  if (filter === "all") return true;
+  const date = parseLocalDate(lesson.scheduled_at);
+  if (!date) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const lessonDay = new Date(date);
+  lessonDay.setHours(0, 0, 0, 0);
+  if (filter === "today") {
+    return lessonDay.getTime() === today.getTime();
+  }
+  const weekEnd = new Date(today);
+  weekEnd.setDate(today.getDate() + 7);
+  if (filter === "week") {
+    return lessonDay >= today && lessonDay < weekEnd;
+  }
+  if (filter === "calendar") {
+    const selected = parseLocalDate(calendarDate);
+    if (!selected) return false;
+    selected.setHours(0, 0, 0, 0);
+    return lessonDay.getTime() === selected.getTime();
+  }
+  return true;
+}
+
+function parseLocalDate(value) {
+  if (!value) return null;
+  const date = new Date(String(value).replace(" ", "T"));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function todayInputValue() {
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 const previewClamp = {

@@ -151,7 +151,9 @@ def miniapp_update_student(request):
         db.set_student_status(student_id, status)
 
     teacher_id_raw = request.POST.get("teacher_id")
-    if teacher_id_raw not in (None, ""):
+    if teacher_id_raw == "":
+        db.remove_student_teacher(student_id)
+    elif teacher_id_raw is not None:
         try:
             new_teacher_id = int(teacher_id_raw)
         except ValueError:

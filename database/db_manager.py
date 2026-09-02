@@ -1043,6 +1043,14 @@ class Database:
         conn.close()
         return True
 
+    def remove_student_teacher(self, student_id):
+        conn = sqlite3.connect(self.db_name)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE assignments SET is_active = 0 WHERE student_id = ?", (student_id,))
+        conn.commit()
+        conn.close()
+        return True
+
     def update_student_profile(self, student_id, level=None, learning_format=None, learning_goal=None, admin_note=None):
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
