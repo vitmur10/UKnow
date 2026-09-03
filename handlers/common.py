@@ -195,14 +195,13 @@ async def get_file_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def handle_history_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Локальні імпорти всередині функції — згідно з правилом #3 (уникнення циклічних імпортів)
-    from handlers.teacher import show_teacher_chat_history
     from handlers.student import show_student_chat_history
 
     user_id = update.effective_user.id
     user_role = db.get_user(user_id)[4]
 
     if user_role == 'teacher':
-        await show_teacher_chat_history(update, context, user_id)
+        await update.message.reply_text("📖 Історія переписок викладача перенесена в Mini App.")
     elif user_role == 'student':
         await show_student_chat_history(update, context, user_id)
     else:

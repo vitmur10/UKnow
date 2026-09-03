@@ -188,7 +188,7 @@ async def menu_button_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     # Захист адмін-кнопок
     admin_buttons = ["👨‍💼 Керування користувачами", "👥 Керування групами", "🗓 Керування розкладом",
-                     "🗂️ Переписки / Чати", "📢 Масова розсилка", "📊 Звіти"]
+                     "🗂️ Переписки / Чати", "📢 Масова розсилка"]
     if text in admin_buttons and role != 'admin':
         await update.message.reply_text("❌ У вас немає прав доступу до цієї функції.")
         return
@@ -196,22 +196,17 @@ async def menu_button_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Словник-маршрутизатор: Кнопка -> (Модуль, Функція)
     routes = {
         '💬 Написати викладачеві/групі': ('handlers.chat_engine', 'student_message_start'),
-        '💬 Написати учневі/групі': ('handlers.chat_engine', 'teacher_message_students'),
+        '💬 Написати групі': ('handlers.chat_engine', 'teacher_message_groups'),
         '🏫 Про школу': ('handlers.student', 'menu_about_school'),
         '📋 Правила школи': ('handlers.student', 'menu_school_rules'),
         '❓ Популярні питання': ('handlers.student', 'menu_faq'),
         '🗓 Мій календар': ('handlers.student', 'menu_student_calendar'),
         '📖 Історія переписок': ('handlers.common', 'handle_history_button'),
-        '📆 Мій розклад': ('handlers.teacher', 'menu_teacher_schedule'),
-        '👨‍🎓 Мої учні': ('handlers.teacher', 'menu_teacher_students'),
         '📚 Мої групи': ('handlers.teacher', 'show_teacher_groups'),
-        '📊 Статистика': ('handlers.teacher', 'menu_teacher_stats'),
-        '📬 Вхідні': ('handlers.teacher', 'teacher_inbox'),
         '👥 Керування групами': ('handlers.admin', 'menu_admin_groups'),
         '🗂️ Переписки / Чати': ('handlers.admin', 'menu_admin_chats'),
         '🗓 Керування розкладом': ('handlers.admin', 'menu_admin_schedule'),
         '👨‍💼 Керування користувачами': ('handlers.admin', 'menu_admin_users'),
-        '📊 Звіти': ('handlers.admin', 'menu_admin_reports'),
         '📞 Написати менеджеру': ('handlers.common', 'route_manager_contact'),
     }
 
@@ -297,6 +292,35 @@ async def teacher_message_students(update: Update, context: ContextTypes.DEFAULT
 
     await update.message.reply_text(
         "💬 Кому хочете написати?",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def teacher_message_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показує викладачеві тільки групи для чату, бо direct-чати винесені в Mini App."""
+    user_id = update.effective_user.id
+    user = db.get_user(user_id)
+
+    if not user or user[4] != 'teacher':
+        await update.message.reply_text("Ця функція доступна лише викладачам.")
+        return
+
+    groups = db.get_teacher_groups(user_id)
+    if not groups:
+        await update.message.reply_text("У вас ще немає груп.")
+        return
+
+    keyboard = []
+    for group in groups:
+        keyboard.append([InlineKeyboardButton(
+            f"👥 {group[1]} ({group[3]})",
+            callback_data=f"teacher_chat_group_{group[0]}"
+        )])
+
+    keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data="cancel_teacher_chat")])
+
+    await update.message.reply_text(
+        "💬 Оберіть групу:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -997,12 +1021,11 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
     elif data == "back_chat_menu":
         if user_role == 'admin':
             keyboard = [
-                [InlineKeyboardButton("👨‍🎓 Учні", callback_data="chat_by_student_0")],
-                [InlineKeyboardButton("👨‍🏫 Викладачі", callback_data="chat_by_teacher_0")],
                 [InlineKeyboardButton("👥 Групи", callback_data="chat_by_group_0")],
+                [InlineKeyboardButton("📅 По даті", callback_data="chat_by_date")],
             ]
             await query.edit_message_text(
-                "🗂️ Переписки. Оберіть категорію:",
+                "🗂️ Переписки. У боті залишені тільки розділи, яких немає в Mini App:",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
         else:

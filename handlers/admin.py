@@ -2404,13 +2404,11 @@ async def menu_admin_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def menu_admin_chats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("👨‍🎓 По учню", callback_data="chat_by_student_0")],
-        [InlineKeyboardButton("👨‍🏫 По викладачу", callback_data="chat_by_teacher_0")],
         [InlineKeyboardButton("👥 По групі", callback_data="chat_by_group_0")],
         [InlineKeyboardButton("📅 По даті", callback_data="chat_by_date")],
         [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_menu")]
     ]
-    await update.message.reply_text("🗂️ Переписки / Чати\n\nОберіть спосіб фільтрації:",
+    await update.message.reply_text("🗂️ Переписки / Чати\n\nУ боті залишені тільки розділи, яких немає в Mini App:",
                                     reply_markup=InlineKeyboardMarkup(keyboard))
 
 
@@ -2428,12 +2426,9 @@ async def menu_admin_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def menu_admin_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("👨‍🏫 Додати викладача", callback_data="add_teacher")],
-        [InlineKeyboardButton("🔗 Призначити викладача", callback_data="assign_teacher")],
-        [InlineKeyboardButton("🔄 Змінити викладача учня", callback_data="change_student_teacher")],
-        [InlineKeyboardButton("📋 Список користувачів", callback_data="show_user_filters_menu")],
         [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_menu")]
     ]
-    await update.message.reply_text("👨‍💼 Керування користувачами\n\nОберіть дію:",
+    await update.message.reply_text("👨‍💼 Керування користувачами\n\nУ боті залишені тільки дії, яких немає в Mini App:",
                                     reply_markup=InlineKeyboardMarkup(keyboard))
 
 
