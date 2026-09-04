@@ -1,8 +1,9 @@
 import os
 import logging
+import re
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
-from urllib.parse import urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 # Завантажуємо змінні з файлу .env
 load_dotenv()
@@ -15,10 +16,19 @@ SUPER_ADMIN_ID = int(os.getenv("SUPER_ADMIN_ID", 0))
 GOOGLE_SCRIPT_URL = os.getenv("GOOGLE_SCRIPT_URL")
 DB_NAME = os.getenv("DB_NAME", "school_bot.db")
 MINIAPP_BASE_PATH = os.getenv("MINIAPP_BASE_PATH", "/miniapp/")
+MARKDOWN_LINK_RE = re.compile(r"^\[([^\]]+)\]\(([^)]+)\)$")
+
+
+def _unwrap_markdown_url(value: str) -> str:
+    match = MARKDOWN_LINK_RE.match(value.strip())
+    if not match:
+        return value
+    label_url, target_url = match.groups()
+    return target_url if target_url.startswith(("http://", "https://")) else label_url
 
 
 def _normalize_miniapp_url(raw_url: str, base_path: str = MINIAPP_BASE_PATH) -> str:
-    value = (raw_url or "").strip()
+    value = _unwrap_markdown_url((raw_url or "").strip())
     if not value:
         return ""
 
@@ -29,7 +39,7 @@ def _normalize_miniapp_url(raw_url: str, base_path: str = MINIAPP_BASE_PATH) -> 
         clean_base = "/" + (base_path or "").strip("/")
         path = "/" if clean_base == "/" else f"{clean_base}/"
 
-    return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
+    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, ""))
 
 
 def build_miniapp_url(start_param: str | None = None) -> str:
@@ -37,7 +47,11 @@ def build_miniapp_url(start_param: str | None = None) -> str:
         return ""
     if not start_param:
         return MINIAPP_URL
-    return f"{MINIAPP_URL}?{urlencode({'startapp': start_param})}"
+
+    parts = urlsplit(MINIAPP_URL)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query["startapp"] = start_param
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
 
 
 MINIAPP_URL = _normalize_miniapp_url(os.getenv("MINIAPP_URL", ""))
