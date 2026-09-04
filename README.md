@@ -15,6 +15,8 @@
   - Mini App дані викладача беруться не лише з `assignments`, а й з груп та уроків
 
 - VPS / Django:
+  - якщо на корені домену працює основний сайт, Telegram Mini App треба відкривати за URL `https://uknow.com.ua/miniapp/`
+  - Vite збирає Mini App з `base: "/miniapp/"`, тому assets віддаються з `/miniapp/assets/...`
   - Django і бот мають дивитися в один і той самий `DB_NAME`, бажано абсолютний шлях
   - для діагностики є команда:
     - `python backend/manage.py miniapp_debug_user <TELEGRAM_ID>`

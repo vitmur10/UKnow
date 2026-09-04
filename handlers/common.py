@@ -6,7 +6,7 @@ import html
 from database.db_manager import db
 from utils.keyboards import get_main_keyboard, get_calendar_keyboard
 from utils.helpers import format_lesson_time
-from config.settings import IMAGE_WARNING_FILE_ID, MINIAPP_URL, logger, KYIV_TZ
+from config.settings import IMAGE_WARNING_FILE_ID, build_miniapp_url, logger, KYIV_TZ
 
 
 # ПРИМІТКА: імпорти show_teacher_chat_history та show_student_chat_history
@@ -37,12 +37,13 @@ async def miniapp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Mini App доступний лише викладачам та адміністраторам.")
         return
 
-    if not MINIAPP_URL:
+    miniapp_url = build_miniapp_url()
+    if not miniapp_url:
         await update.message.reply_text("❌ MINIAPP_URL не налаштований у .env")
         return
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Teacher's Hub", web_app=WebAppInfo(url=MINIAPP_URL))]
+        [InlineKeyboardButton("Teacher's Hub", web_app=WebAppInfo(url=miniapp_url))]
     ])
     await update.message.reply_text("Відкрити кабінет викладача:", reply_markup=keyboard)
 

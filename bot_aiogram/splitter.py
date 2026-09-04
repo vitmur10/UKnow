@@ -2,7 +2,7 @@ from channels.layers import get_channel_layer
 from aiogram.types import FSInputFile, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
 from database.db_manager import db
-from config.settings import MINIAPP_URL
+from config.settings import build_miniapp_url
 from workspace.sqlite_payloads import message_payload
 
 channel_layer = get_channel_layer()
@@ -33,11 +33,12 @@ async def broadcast_to_teacher(teacher_id: int, message_id: int):
 
 
 def student_chat_button(student_id: int):
-    if not MINIAPP_URL:
+    miniapp_url = build_miniapp_url(f"chat_{student_id}")
+    if not miniapp_url:
         return None
     return InlineKeyboardButton(
         text="Відкрити чат",
-        web_app=WebAppInfo(url=f"{MINIAPP_URL}?startapp=chat_{student_id}"),
+        web_app=WebAppInfo(url=miniapp_url),
     )
 
 

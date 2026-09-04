@@ -29,7 +29,7 @@ from database.db_manager import db
 from utils.keyboards import get_main_keyboard, get_chat_active_keyboard
 from utils.helpers import is_lesson_link
 from config.settings import (
-    MINIAPP_URL,
+    build_miniapp_url,
     now_kyiv_str, now_kyiv, ALL_MAIN_MENU_BUTTONS_LIST,
 )
 from services.miniapp_bridge import mirror_delete_to_miniapp, mirror_message_to_miniapp
@@ -434,11 +434,12 @@ def _build_reply_markup(sender_role: str, sender_id: int, kind: str, peer_id: in
             callback_data=f"inbox_reply_{sender_id}"
         )
     ]]
-    if MINIAPP_URL:
+    miniapp_url = build_miniapp_url(f"chat_{sender_id}")
+    if miniapp_url:
         buttons.append([
             InlineKeyboardButton(
                 "Відкрити чат",
-                web_app=WebAppInfo(url=f"{MINIAPP_URL}?startapp=chat_{sender_id}")
+                web_app=WebAppInfo(url=miniapp_url)
             )
         ])
     return InlineKeyboardMarkup(buttons)

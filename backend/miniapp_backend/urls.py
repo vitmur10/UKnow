@@ -36,6 +36,8 @@ urlpatterns = [
     path("api/miniapp/attachment/upload/", miniapp_upload_attachment, name="miniapp-upload-attachment"),
     path("api/messages/<int:message_id>/voice/", message_voice, name="message-voice"),
     path("api/messages/<int:message_id>/media/", message_media, name="message-media"),
+    re_path(r"^miniapp/assets/(?P<path>.*)$", serve, {"document_root": settings.FRONTEND_DIST_DIR / "assets"}),
+    re_path(r"^miniapp/?$", miniapp_index, name="miniapp-index-path"),
     re_path(r"^assets/(?P<path>.*)$", serve, {"document_root": settings.FRONTEND_DIST_DIR / "assets"}),
     path("", miniapp_index, name="miniapp-index"),
 ]
