@@ -524,8 +524,8 @@ export default function TeacherWorkspace() {
   }
 
   return (
-    <div className="h-[100dvh] bg-[#eef2f5] text-[#111827]">
-      <div className="mx-auto grid h-full max-w-6xl overflow-hidden bg-white shadow-sm md:grid-cols-[380px_1fr] md:border-x md:border-zinc-200">
+    <div className="h-[100dvh] w-full overflow-x-hidden bg-[#eef2f5] text-[#111827]">
+      <div className="mx-auto grid h-full w-full min-w-0 max-w-6xl overflow-hidden bg-white shadow-sm md:grid-cols-[380px_minmax(0,1fr)] md:border-x md:border-zinc-200">
         <ChatList
           role={role}
           chats={filteredChats}
@@ -838,8 +838,8 @@ function ChatPanel({
   }
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-white">
-      <header className="flex h-16 shrink-0 items-center gap-3 border-b border-zinc-200 px-3">
+    <section className="flex h-full min-w-0 flex-col bg-white">
+      <header className="flex h-16 min-w-0 shrink-0 items-center gap-3 border-b border-zinc-200 px-3">
         <button onClick={back} className="grid h-10 w-10 place-items-center rounded-full hover:bg-zinc-100 md:hidden" title="Назад">
           <ArrowLeft size={21} />
         </button>
@@ -1356,8 +1356,8 @@ function EmptyState({ text }) {
 
 function ErrorPanel({ message }) {
   return (
-    <section className="flex h-full min-h-0 flex-col bg-white">
-      <main className="grid flex-1 place-items-center px-6 py-8">
+    <section className="flex h-full min-w-0 flex-col bg-white">
+      <main className="grid min-w-0 flex-1 place-items-center px-6 py-8">
         <div className="max-w-md rounded-xl border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-700">
           <div className="flex items-start gap-3">
             <AlertTriangle size={18} className="mt-0.5 shrink-0" />
@@ -1387,15 +1387,15 @@ function SectionPanel({ section, role, chats, allChats, lessons, teachers, lesso
     const showStudents = userView === "students" || userView === "all";
     const showTeachers = role === "admin" && (userView === "teachers" || userView === "all");
     return (
-      <section className="flex h-full min-h-0 flex-col bg-white">
+      <section className="flex h-full min-w-0 flex-col bg-white">
         <PanelHeader
           title={role === "admin" ? "Користувачі" : "Учні"}
           subtitle={role === "admin" ? `${activeStudents.length} активних · ${teachers.length} викладачів` : `${activeStudents.length} активних · ${archivedStudents.length} в архіві`}
           back={back}
         />
-        <main className={`flex-1 overflow-y-auto px-4 py-4 ${role === "admin" ? SCROLL_SAFE_AREA_CLASS : ""}`}>
+        <main className={`min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-4 sm:px-4 ${role === "admin" ? SCROLL_SAFE_AREA_CLASS : ""}`}>
           {role === "admin" && (
-            <div className="mb-3 grid grid-cols-3 gap-1 rounded-lg bg-zinc-100 p-1 text-xs font-semibold">
+            <div className="mb-3 grid min-w-0 grid-cols-3 gap-1 rounded-lg bg-zinc-100 p-1 text-xs font-semibold">
               {[
                 ["students", "Учні"],
                 ["teachers", "Викладачі"],
@@ -1411,13 +1411,13 @@ function SectionPanel({ section, role, chats, allChats, lessons, teachers, lesso
               ))}
             </div>
           )}
-          <div className="grid gap-3">
+          <div className="grid min-w-0 gap-3">
             {showStudents && (
-              <div className="grid gap-2">
+              <div className="grid min-w-0 gap-2">
                 {role === "admin" && <p className="text-xs font-semibold uppercase text-zinc-400">Учні</p>}
                 {allChats.map((chat) => (
-                  <div key={chat.id} className="rounded-lg border border-zinc-100 px-3 py-3">
-                    <div className="flex items-center gap-3">
+                  <div key={chat.id} className="min-w-0 rounded-lg border border-zinc-100 px-3 py-3">
+                    <div className="flex min-w-0 items-center gap-3">
                       <Avatar initials={chat.initials} size="sm" tone={chat.is_archived ? "yellow" : "blue"} />
                       <button onClick={() => openChat(chat.id)} className="min-w-0 flex-1 text-left">
                         <p className="truncate text-sm font-semibold">{chat.title}</p>
@@ -1426,7 +1426,7 @@ function SectionPanel({ section, role, chats, allChats, lessons, teachers, lesso
                       {chat.waiting_reply && <span className="rounded-full bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-700">Відповісти</span>}
                     </div>
                     {role === "admin" && (
-                      <div className="mt-3 grid grid-cols-3 gap-0.5">
+                      <div className="mt-3 grid min-w-0 grid-cols-3 gap-1">
                         {[
                           ["active", "Активний", "Актив."],
                           ["paused", "Пауза", "Пауза"],
@@ -1436,12 +1436,12 @@ function SectionPanel({ section, role, chats, allChats, lessons, teachers, lesso
                             key={value}
                             onClick={() => updateStudent(chat.id, { student_status: value })}
                             className={[
-                              "h-6 min-w-0 rounded-md px-0.5 text-[10px] font-medium leading-none tracking-normal",
+                              "h-8 min-w-0 overflow-hidden rounded-md px-1 text-[10px] font-semibold leading-none tracking-normal",
                               chat.student_status === value ? "bg-[#0c99c9] text-white" : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200",
                             ].join(" ")}
                           >
-                            <span className="sm:hidden">{mobileLabel}</span>
-                            <span className="hidden sm:inline">{label}</span>
+                            <span className="block truncate sm:hidden">{mobileLabel}</span>
+                            <span className="hidden truncate sm:block">{label}</span>
                           </button>
                         ))}
                       </div>
@@ -1472,9 +1472,9 @@ function SectionPanel({ section, role, chats, allChats, lessons, teachers, lesso
 
   if (section === "lessons") {
     return (
-      <section className="flex h-full min-h-0 flex-col bg-white">
+      <section className="flex h-full min-w-0 flex-col bg-white">
         <PanelHeader title="Уроки" subtitle={`${visibleLessons.length} з ${lessons.length} заплановано`} back={back} />
-        <main className={`flex-1 overflow-y-auto px-4 py-4 ${role === "admin" ? SCROLL_SAFE_AREA_CLASS : ""}`}>
+        <main className={`min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-4 sm:px-4 ${role === "admin" ? SCROLL_SAFE_AREA_CLASS : ""}`}>
           <div className="mb-3 flex gap-1 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {LESSON_FILTERS.map((filter) => (
               <button
@@ -1543,9 +1543,9 @@ function SectionPanel({ section, role, chats, allChats, lessons, teachers, lesso
   }
 
   return (
-    <section className="flex h-full min-h-0 flex-col bg-white">
+    <section className="flex h-full min-w-0 flex-col bg-white">
       <PanelHeader title={role === "admin" ? "Звіти" : "Статистика"} subtitle={role === "admin" ? "Адміністратор" : "Викладач"} back={back} />
-      <main className={`grid flex-1 content-start gap-3 overflow-y-auto px-4 py-4 ${role === "admin" ? SCROLL_SAFE_AREA_CLASS : ""}`}>
+      <main className={`grid min-w-0 flex-1 content-start gap-3 overflow-y-auto overflow-x-hidden px-3 py-4 sm:px-4 ${role === "admin" ? SCROLL_SAFE_AREA_CLASS : ""}`}>
         <SummaryCard label="Активні учні" value={activeStudents.length} />
         <SummaryCard label="Непрочитані" value={unreadTotal} />
         <SummaryCard label="Чекають відповіді" value={waitingCount} />
@@ -1698,7 +1698,7 @@ function AdminPanel({ role, chats, allChats, teachers, openChat, setActiveSectio
 
 function PanelHeader({ title, subtitle, back }) {
   return (
-    <header className="flex h-16 shrink-0 items-center gap-3 border-b border-zinc-200 px-4">
+    <header className="flex h-16 min-w-0 shrink-0 items-center gap-3 border-b border-zinc-200 px-4">
       {back && (
         <button onClick={back} className="grid h-10 w-10 place-items-center rounded-full hover:bg-zinc-100 md:hidden" title="До чатів">
           <ArrowLeft size={21} />
