@@ -69,6 +69,7 @@ export default function TeacherWorkspace() {
   const [replyingTo, setReplyingTo] = useState(null);
   const [editingMessage, setEditingMessage] = useState(null);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [preferredAdminTab, setPreferredAdminTab] = useState("dialog");
 
   const wsRef = useRef(null);
   const selectedChatIdRef = useRef(null);
@@ -330,9 +331,10 @@ export default function TeacherWorkspace() {
     }
   }
 
-  function openChat(chatId) {
+  function openChat(chatId, adminTab = "dialog") {
     setActiveSection("chats");
     setSelectedChatId(chatId);
+    setPreferredAdminTab(adminTab);
     markChatReadLocally(chatId);
     setInfoOpen(false);
     setReplyingTo(null);
@@ -583,6 +585,7 @@ export default function TeacherWorkspace() {
           updateStudent={updateStudent}
           teacherOptions={teacherOptions}
           loadMessageEdits={loadMessageEdits}
+          preferredAdminTab={preferredAdminTab}
           back={() => setSelectedChatId(null)}
         /> : (
           <SectionPanel
@@ -814,6 +817,7 @@ function ChatPanel({
   updateStudent,
   teacherOptions,
   loadMessageEdits,
+  preferredAdminTab,
   back,
 }) {
   const [adminTab, setAdminTab] = useState("dialog");
@@ -823,6 +827,11 @@ function ChatPanel({
   const eventMessages = useMemo(() => messages.filter((message) => (
     message.possible_contact || message.is_deleted || message.edited_at
   )), [messages]);
+
+  useEffect(() => {
+    if (role !== "admin") return;
+    setAdminTab(preferredAdminTab || "dialog");
+  }, [chat?.id, preferredAdminTab, role]);
 
   useEffect(() => {
     if (adminTab !== "dialog") return;
@@ -1419,7 +1428,7 @@ function SectionPanel({ section, role, chats, allChats, lessons, teachers, lesso
                   <div key={chat.id} className="min-w-0 rounded-lg border border-zinc-100 px-3 py-3">
                     <div className="flex min-w-0 items-center gap-3">
                       <Avatar initials={chat.initials} size="sm" tone={chat.is_archived ? "yellow" : "blue"} />
-                      <button onClick={() => openChat(chat.id)} className="min-w-0 flex-1 text-left">
+                      <button onClick={() => openChat(chat.id, role === "admin" ? "info" : "dialog")} className="min-w-0 flex-1 text-left">
                         <p className="truncate text-sm font-semibold">{chat.title}</p>
                         <p className="truncate text-xs text-zinc-500">{[chat.language, chat.level, chat.teacher_name || "без викладача", statusLabel(chat.student_status)].filter(Boolean).join(" · ")}</p>
                       </button>
