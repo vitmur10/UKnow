@@ -504,7 +504,7 @@ export default function TeacherWorkspace() {
   }
 
   async function updateStudent(chatId, values) {
-    if (!wsToken) return;
+    if (!wsToken) throw new Error("Потрібна повторна авторизація в Telegram");
     const response = await fetch(`${API_BASE}/miniapp/student/update/`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -514,11 +514,11 @@ export default function TeacherWorkspace() {
         ...values,
       }),
     });
-    if (response.ok) {
-      const payload = await response.json();
-      setChats(payload.chats || []);
-      if (payload.teachers) setTeachers(payload.teachers || []);
-    }
+    if (!response.ok) throw new Error(await readApiError(response, "Не вдалося зберегти зміни"));
+    const payload = await response.json();
+    setChats(payload.chats || []);
+    if (payload.teachers) setTeachers(payload.teachers || []);
+    return payload;
   }
 
   async function loadMessageEdits(messageId) {
@@ -1221,6 +1221,8 @@ function StudentInfoContent({ chat, editable = false, onSave, teacherOptions = [
     admin_note: chat.admin_note || "",
     teacher_id: chat.teacher_id ? String(chat.teacher_id) : "",
   });
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
 
   useEffect(() => {
     setForm({
@@ -1232,6 +1234,20 @@ function StudentInfoContent({ chat, editable = false, onSave, teacherOptions = [
       teacher_id: chat.teacher_id ? String(chat.teacher_id) : "",
     });
   }, [chat]);
+
+  async function save(values) {
+    if (!onSave || saving) return;
+    setSaving(true);
+    setSaveError("");
+    try {
+      await onSave(values);
+      setForm(values);
+    } catch (error) {
+      setSaveError(error.message || "Не вдалося зберегти зміни");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   if (editable) {
     return (
@@ -1279,14 +1295,17 @@ function StudentInfoContent({ chat, editable = false, onSave, teacherOptions = [
           />
         </label>
         <button
-          onClick={() => onSave?.(form)}
-          className="h-10 rounded-lg bg-[#0c99c9] px-4 text-sm font-semibold text-white hover:bg-[#087fab]"
+          onClick={() => save(form)}
+          disabled={saving}
+          className="h-10 rounded-lg bg-[#0c99c9] px-4 text-sm font-semibold text-white hover:bg-[#087fab] disabled:opacity-60"
         >
-          Зберегти
+          {saving ? "Збереження…" : "Зберегти"}
         </button>
+        {saveError && <p className="text-xs text-red-600">{saveError}</p>}
         <button
-          onClick={() => onSave?.({ ...form, student_status: form.student_status === "completed" ? "active" : "completed" })}
-          className="h-10 rounded-lg bg-zinc-100 px-4 text-sm font-semibold text-zinc-700 hover:bg-zinc-200"
+          onClick={() => save({ ...form, student_status: form.student_status === "completed" ? "active" : "completed" })}
+          disabled={saving}
+          className="h-10 rounded-lg bg-zinc-100 px-4 text-sm font-semibold text-zinc-700 hover:bg-zinc-200 disabled:opacity-60"
         >
           {form.student_status === "completed" ? "Повернути з архіву" : "В архів"}
         </button>
@@ -1422,6 +1441,7 @@ function ErrorPanel({ message }) {
 
 function SectionPanel({ section, role, chats, allChats, lessons, teachers, lessonFilter, setLessonFilter, openChat, updateStudent, back }) {
   const [userView, setUserView] = useState("students");
+  const [userSearch, setUserSearch] = useState("");
   const [calendarDate, setCalendarDate] = useState(todayInputValue());
   const activeStudents = allChats.filter((chat) => !chat.is_archived);
   const archivedStudents = allChats.filter((chat) => chat.is_archived);
@@ -1434,6 +1454,15 @@ function SectionPanel({ section, role, chats, allChats, lessons, teachers, lesso
   if (section === "students") {
     const showStudents = userView === "students" || userView === "all";
     const showTeachers = role === "admin" && (userView === "teachers" || userView === "all");
+    const normalizedUserSearch = userSearch.trim().toLocaleLowerCase();
+    const matchingStudents = allChats.filter((chat) => !normalizedUserSearch || [
+      chat.title,
+      chat.username,
+      chat.language,
+      chat.level,
+      chat.teacher_name,
+    ].filter(Boolean).join(" ").toLocaleLowerCase().includes(normalizedUserSearch));
+    const matchingTeachers = teachers.filter((teacher) => !normalizedUserSearch || teacher.name.toLocaleLowerCase().includes(normalizedUserSearch));
     return (
       <section className="flex h-full min-h-0 min-w-0 flex-col bg-white">
         <PanelHeader
@@ -1459,11 +1488,25 @@ function SectionPanel({ section, role, chats, allChats, lessons, teachers, lesso
               ))}
             </div>
           )}
+          <div className="mb-3 flex h-10 items-center gap-2 rounded-lg bg-[#eef0f3] px-3 text-zinc-500">
+            <Search size={17} />
+            <input
+              value={userSearch}
+              onChange={(event) => setUserSearch(event.target.value)}
+              className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-zinc-500"
+              placeholder={showTeachers && !showStudents ? "Пошук викладача" : "Пошук учня або викладача"}
+            />
+            {userSearch && (
+              <button onClick={() => setUserSearch("")} className="grid h-7 w-7 place-items-center rounded-full hover:bg-white" title="Очистити пошук">
+                <X size={15} />
+              </button>
+            )}
+          </div>
           <div className="grid min-w-0 gap-3">
             {showStudents && (
               <div className="grid min-w-0 gap-2">
                 {role === "admin" && <p className="text-xs font-semibold uppercase text-zinc-400">Учні</p>}
-                {allChats.map((chat) => (
+                {matchingStudents.map((chat) => (
                   <div key={chat.id} className="min-w-0 rounded-lg border border-zinc-100 px-3 py-3">
                     <div className="flex min-w-0 items-center gap-3">
                       <Avatar initials={chat.initials} size="sm" tone={chat.is_archived ? "yellow" : "blue"} />
@@ -1501,7 +1544,7 @@ function SectionPanel({ section, role, chats, allChats, lessons, teachers, lesso
             {showTeachers && (
               <div className="grid gap-2">
                 <p className="text-xs font-semibold uppercase text-zinc-400">Викладачі</p>
-                {teachers.map((teacher) => {
+                {matchingTeachers.map((teacher) => {
                   const teacherStudents = allChats.filter((chat) => String(chat.teacher_id || "") === String(teacher.id));
                   return (
                     <div key={teacher.id} className="rounded-lg border border-zinc-100 px-3 py-3">

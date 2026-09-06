@@ -224,7 +224,12 @@ def miniapp_update_student(request):
     ]
 
     for viewer_id in affected_viewers:
-        _broadcast_miniapp_state(viewer_id)
+        try:
+            _broadcast_miniapp_state(viewer_id)
+        except Exception:
+            # The database update must succeed even when a live WebSocket
+            # broadcast is temporarily unavailable (for example, Redis restart).
+            pass
 
     return JsonResponse({"chats": dialogs, "teachers": teachers})
 
