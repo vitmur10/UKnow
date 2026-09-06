@@ -875,9 +875,8 @@ function ChatPanel({
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col bg-white">
       <header className="flex h-16 min-w-0 shrink-0 items-center gap-3 border-b border-zinc-200 px-3">
-        <button onClick={back} className="flex h-10 shrink-0 items-center gap-1 rounded-full px-2 text-sm font-medium hover:bg-zinc-100 md:hidden" title="До списку чатів">
+        <button onClick={back} className="grid h-10 w-10 shrink-0 place-items-center rounded-full hover:bg-zinc-100 md:hidden" title="До списку чатів">
           <ArrowLeft size={21} />
-          <span>Назад</span>
         </button>
         <Avatar initials={chat.initials} tone="blue" size="sm" />
         <button onClick={() => setInfoOpen(true)} className="min-w-0 flex-1 text-left">
@@ -960,25 +959,27 @@ function ChatPanel({
           <EventLog messages={eventMessages} />
         </main>
       ) : (
-        <main className={role === "admin" ? "min-h-0 flex-1 space-y-2 overflow-y-auto bg-[#f6f7fb] px-4 py-4" : "min-h-0 flex-1 space-y-2 overflow-y-auto bg-white px-4 py-4"}>
-          {messages.map((message) => (
-            <MessageBubble
-              key={message.id}
-              message={message}
-              role={role}
-              onDelete={() => deleteMessage(message.id)}
-              onReply={() => {
-                setEditingMessage(null);
-                setReplyingTo(message);
-              }}
-              onEdit={() => startEdit(message)}
-              onHistory={async () => {
-                const edits = await loadMessageEdits(message.id);
-                setEditHistory({ message, edits });
-              }}
-            />
-          ))}
-          <div ref={messagesEndRef} />
+        <main className={role === "admin" ? "min-h-0 flex-1 overflow-y-auto bg-[#f6f7fb] px-4 py-4" : "min-h-0 flex-1 overflow-y-auto bg-white px-4 py-4"}>
+          <div className="flex min-h-full flex-col justify-end gap-2">
+            {messages.map((message) => (
+              <MessageBubble
+                key={message.id}
+                message={message}
+                role={role}
+                onDelete={() => deleteMessage(message.id)}
+                onReply={() => {
+                  setEditingMessage(null);
+                  setReplyingTo(message);
+                }}
+                onEdit={() => startEdit(message)}
+                onHistory={async () => {
+                  const edits = await loadMessageEdits(message.id);
+                  setEditHistory({ message, edits });
+                }}
+              />
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
         </main>
       )}
 
