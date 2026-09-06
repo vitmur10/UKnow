@@ -873,10 +873,11 @@ function ChatPanel({
   }
 
   return (
-    <section className="flex h-full min-w-0 flex-col bg-white">
+    <section className="flex h-full min-h-0 min-w-0 flex-col bg-white">
       <header className="flex h-16 min-w-0 shrink-0 items-center gap-3 border-b border-zinc-200 px-3">
-        <button onClick={back} className="grid h-10 w-10 place-items-center rounded-full hover:bg-zinc-100 md:hidden" title="Назад">
+        <button onClick={back} className="flex h-10 shrink-0 items-center gap-1 rounded-full px-2 text-sm font-medium hover:bg-zinc-100 md:hidden" title="До списку чатів">
           <ArrowLeft size={21} />
+          <span>Назад</span>
         </button>
         <Avatar initials={chat.initials} tone="blue" size="sm" />
         <button onClick={() => setInfoOpen(true)} className="min-w-0 flex-1 text-left">
@@ -941,7 +942,7 @@ function ChatPanel({
       </div> : null}
 
       {role === "admin" && adminTab === "info" ? (
-        <main className="flex-1 overflow-y-auto bg-white px-4 py-4">
+        <main className="min-h-0 flex-1 overflow-y-auto bg-white px-4 py-4">
           <LessonGoalCard chat={chat} />
           <StudentInfoContent
             chat={chat}
@@ -951,15 +952,15 @@ function ChatPanel({
           />
         </main>
       ) : role === "admin" && adminTab === "files" ? (
-        <main className="flex-1 overflow-y-auto bg-white px-4 py-4">
+        <main className="min-h-0 flex-1 overflow-y-auto bg-white px-4 py-4">
           <FileList messages={fileMessages} />
         </main>
       ) : role === "admin" && adminTab === "events" ? (
-        <main className="flex-1 overflow-y-auto bg-white px-4 py-4">
+        <main className="min-h-0 flex-1 overflow-y-auto bg-white px-4 py-4">
           <EventLog messages={eventMessages} />
         </main>
       ) : (
-        <main className={role === "admin" ? "flex-1 space-y-2 overflow-y-auto bg-[#f6f7fb] px-4 py-4" : "flex-1 space-y-2 overflow-y-auto bg-white px-4 py-4"}>
+        <main className={role === "admin" ? "min-h-0 flex-1 space-y-2 overflow-y-auto bg-[#f6f7fb] px-4 py-4" : "min-h-0 flex-1 space-y-2 overflow-y-auto bg-white px-4 py-4"}>
           {messages.map((message) => (
             <MessageBubble
               key={message.id}
