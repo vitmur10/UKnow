@@ -227,7 +227,7 @@ export default function TeacherWorkspace() {
         setChats(payload.chats || []);
         setLessons(payload.lessons || []);
         setTeachers(payload.teachers || []);
-        setMessages(payload.messages || []);
+        setMessages((current) => mergeMessages(current, payload.messages || []));
         setAuthError("");
       } catch {
         // WebSocket remains the primary channel; polling is only a quiet fallback.
@@ -254,7 +254,7 @@ export default function TeacherWorkspace() {
   function handleWsMessage(data) {
     if (data.type === "chat.history") {
       setChats(data.chats || []);
-      setMessages(data.messages || []);
+      setMessages((current) => mergeMessages(current, data.messages || []));
       setLessons(data.lessons || []);
       return;
     }
@@ -543,10 +543,7 @@ export default function TeacherWorkspace() {
     if (!response.ok) return;
     const payload = await response.json();
     const history = payload.messages || [];
-    setMessages((current) => {
-      const preserved = current.filter((message) => String(message.chat_id) !== String(chatId));
-      return [...preserved, ...history];
-    });
+    setMessages((current) => mergeMessages(current, history));
   }
 
   return (
@@ -1424,13 +1421,13 @@ function SectionPanel({ section, role, chats, allChats, lessons, teachers, lesso
     const showStudents = userView === "students" || userView === "all";
     const showTeachers = role === "admin" && (userView === "teachers" || userView === "all");
     return (
-      <section className="flex h-full min-w-0 flex-col bg-white">
+      <section className="flex h-full min-h-0 min-w-0 flex-col bg-white">
         <PanelHeader
           title={role === "admin" ? "Користувачі" : "Учні"}
           subtitle={role === "admin" ? `${activeStudents.length} активних · ${teachers.length} викладачів` : `${activeStudents.length} активних · ${archivedStudents.length} в архіві`}
           back={back}
         />
-        <main className={`min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-4 sm:px-4 ${role === "admin" ? SCROLL_SAFE_AREA_CLASS : ""}`}>
+        <main className={`min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-4 sm:px-4 ${role === "admin" ? SCROLL_SAFE_AREA_CLASS : ""}`}>
           {role === "admin" && (
             <div className="mb-3 grid min-w-0 grid-cols-3 gap-1 rounded-lg bg-zinc-100 p-1 text-xs font-semibold">
               {[
@@ -1509,9 +1506,9 @@ function SectionPanel({ section, role, chats, allChats, lessons, teachers, lesso
 
   if (section === "lessons") {
     return (
-      <section className="flex h-full min-w-0 flex-col bg-white">
+      <section className="flex h-full min-h-0 min-w-0 flex-col bg-white">
         <PanelHeader title="Уроки" subtitle={`${visibleLessons.length} з ${lessons.length} заплановано`} back={back} />
-        <main className={`min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-4 sm:px-4 ${role === "admin" ? SCROLL_SAFE_AREA_CLASS : ""}`}>
+        <main className={`min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-4 sm:px-4 ${role === "admin" ? SCROLL_SAFE_AREA_CLASS : ""}`}>
           <div className="mb-3 flex gap-1 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {LESSON_FILTERS.map((filter) => (
               <button
@@ -1580,9 +1577,9 @@ function SectionPanel({ section, role, chats, allChats, lessons, teachers, lesso
   }
 
   return (
-    <section className="flex h-full min-w-0 flex-col bg-white">
+    <section className="flex h-full min-h-0 min-w-0 flex-col bg-white">
       <PanelHeader title={role === "admin" ? "Звіти" : "Статистика"} subtitle={role === "admin" ? "Адміністратор" : "Викладач"} back={back} />
-      <main className={`grid min-w-0 flex-1 content-start gap-3 overflow-y-auto overflow-x-hidden px-3 py-4 sm:px-4 ${role === "admin" ? SCROLL_SAFE_AREA_CLASS : ""}`}>
+      <main className={`grid min-h-0 min-w-0 flex-1 content-start gap-3 overflow-y-auto overflow-x-hidden px-3 py-4 sm:px-4 ${role === "admin" ? SCROLL_SAFE_AREA_CLASS : ""}`}>
         <SummaryCard label="Активні учні" value={activeStudents.length} />
         <SummaryCard label="Непрочитані" value={unreadTotal} />
         <SummaryCard label="Чекають відповіді" value={waitingCount} />
@@ -1838,6 +1835,12 @@ function upsertMessage(messages, message) {
   const found = messages.some((item) => item.id === message.id);
   if (!found) return [...messages, message];
   return messages.map((item) => (item.id === message.id ? message : item));
+}
+
+function mergeMessages(current, incoming) {
+  const byId = new Map(current.map((message) => [String(message.id), message]));
+  incoming.forEach((message) => byId.set(String(message.id), message));
+  return [...byId.values()].sort(compareMessages);
 }
 
 function markMessageDeletedLocally(messages, messageId) {
