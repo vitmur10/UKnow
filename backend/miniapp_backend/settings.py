@@ -85,10 +85,16 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [(
-                os.getenv("REDIS_HOST", "127.0.0.1"),
-                int(os.getenv("REDIS_PORT", "6379")),
-            )],
+            # redis-py 8 applies a short default socket timeout.  It is shorter
+            # than channels-redis's blocking receive, which disconnects idle
+            # WebSockets with a TimeoutError.  Keep the socket alive long enough
+            # for the channel-layer receive cycle.
+            "hosts": [{
+                "host": os.getenv("REDIS_HOST", "127.0.0.1"),
+                "port": int(os.getenv("REDIS_PORT", "6379")),
+                "socket_timeout": 30,
+                "socket_connect_timeout": 5,
+            }],
         },
     }
 }
