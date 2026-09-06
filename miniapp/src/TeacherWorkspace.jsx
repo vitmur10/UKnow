@@ -591,6 +591,7 @@ export default function TeacherWorkspace() {
           text={text}
           setText={setText}
           sendText={sendText}
+          sending={sending}
           recording={recording}
           toggleRecording={toggleRecording}
           deleteMessage={deleteMessage}
@@ -823,6 +824,7 @@ function ChatPanel({
   text,
   setText,
   sendText,
+  sending,
   recording,
   toggleRecording,
   deleteMessage,
