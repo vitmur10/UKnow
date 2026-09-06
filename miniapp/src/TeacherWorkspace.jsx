@@ -63,6 +63,7 @@ export default function TeacherWorkspace() {
   const [text, setText] = useState("");
   const [status, setStatus] = useState("connecting");
   const [recording, setRecording] = useState(false);
+  const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [authError, setAuthError] = useState("");
@@ -344,9 +345,9 @@ export default function TeacherWorkspace() {
     persistChatRead(chatId);
   }
 
-  function sendText() {
+  async function sendText() {
     const value = text.trim();
-    if (!value || !selectedChatId) return;
+    if (!value || !selectedChatId || !wsToken) return;
 
     if (editingMessage) {
       wsRef.current?.send(JSON.stringify({
@@ -356,14 +357,37 @@ export default function TeacherWorkspace() {
       }));
       setEditingMessage(null);
     } else {
-      wsRef.current?.send(JSON.stringify({
-        type: "chat.message",
-        chat_id: selectedChatId,
-        text: value,
-        reply_to_message_id: replyingTo?.id || null,
-      }));
-      markChatReadLocally(selectedChatId);
-      setReplyingTo(null);
+      setSending(true);
+      setUploadError("");
+      try {
+        const response = await fetch(`${API_BASE}/miniapp/message/send/`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            token: wsToken,
+            student_id: String(selectedChatId),
+            text: value,
+            ...(replyingTo?.id ? { reply_to_message_id: String(replyingTo.id) } : {}),
+          }),
+        });
+        if (!response.ok) throw new Error(await readApiError(response, "Не вдалося надіслати повідомлення"));
+        const payload = await response.json();
+        if (!payload.message) throw new Error("Не вдалося надіслати повідомлення");
+        setMessages((current) => {
+          const next = upsertMessage(current, payload.message);
+          setChats((chatsCurrent) => syncChatFromMessages(chatsCurrent, payload.message.chat_id, next, {
+            clearUnread: String(selectedChatIdRef.current) === String(payload.message.chat_id),
+          }));
+          return next;
+        });
+        markChatReadLocally(selectedChatId);
+        setReplyingTo(null);
+      } catch (error) {
+        setUploadError(error.message || "Не вдалося надіслати повідомлення");
+        return;
+      } finally {
+        setSending(false);
+      }
     }
     setText("");
   }
@@ -1019,7 +1043,7 @@ function ChatPanel({
           </button>
           <button
             onClick={sendText}
-            disabled={!text.trim()}
+            disabled={!text.trim() || sending}
             className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#0c99c9] text-white transition hover:bg-[#087fab] disabled:bg-zinc-300"
             title="Надіслати"
           >

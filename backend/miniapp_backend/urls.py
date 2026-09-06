@@ -13,6 +13,7 @@ from workspace.views import (
     miniapp_delete_message,
     miniapp_mark_read,
     miniapp_message_edits,
+    miniapp_send_message,
     miniapp_upload_attachment,
     miniapp_update_student,
 )
@@ -29,6 +30,7 @@ urlpatterns = [
     path("api/miniapp/auth/", miniapp_auth, name="miniapp-auth"),
     path("api/miniapp/bootstrap/", miniapp_bootstrap, name="miniapp-bootstrap"),
     path("api/miniapp/chat/history/", miniapp_chat_history, name="miniapp-chat-history"),
+    path("api/miniapp/message/send/", miniapp_send_message, name="miniapp-send-message"),
     path("api/miniapp/student/update/", miniapp_update_student, name="miniapp-update-student"),
     path("api/miniapp/message/edits/", miniapp_message_edits, name="miniapp-message-edits"),
     path("api/miniapp/chat/read/", miniapp_mark_read, name="miniapp-mark-read"),

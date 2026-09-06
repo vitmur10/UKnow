@@ -12,7 +12,7 @@ from django.views.decorators.http import require_GET, require_POST
 from channels.layers import get_channel_layer
 
 from database.db_manager import db
-from .bot_api import delete_telegram_message, send_attachment_to_student
+from .bot_api import delete_telegram_message, send_attachment_to_student, send_text_to_student
 from .telegram_auth import TelegramAuthError, issue_ws_token, validate_telegram_init_data
 from .telegram_auth import verify_ws_token
 from .sqlite_payloads import dialog_payload, message_payload
@@ -124,6 +124,54 @@ def miniapp_chat_history(request):
 
     messages = [message_payload(row, user_id, user[4]) for row in db.get_miniapp_history(user_id, student_id=student_id)]
     return JsonResponse({"messages": messages, "student_id": student_id})
+
+
+@csrf_exempt
+@require_POST
+def miniapp_send_message(request):
+    """Send a teacher's text message without relying on the WebSocket connection."""
+    try:
+        user_id, user = _require_miniapp_user(request)
+    except Exception:
+        return JsonResponse({"error": "Unauthorized"}, status=401)
+
+    if user[4] not in ("teacher", "admin"):
+        return JsonResponse({"error": "Teacher access required"}, status=403)
+
+    try:
+        student_id = int(request.POST.get("student_id", "0"))
+    except ValueError:
+        return JsonResponse({"error": "Invalid student_id"}, status=400)
+    text = (request.POST.get("text") or "").strip()
+    if not text:
+        return JsonResponse({"error": "Message text is required"}, status=400)
+    if user[4] != "admin" and not db.teacher_can_access_student(user_id, student_id):
+        return JsonResponse({"error": "Forbidden"}, status=403)
+
+    reply_to_raw = request.POST.get("reply_to_message_id") or None
+    try:
+        reply_to_message_id = int(reply_to_raw) if reply_to_raw else None
+    except ValueError:
+        return JsonResponse({"error": "Invalid reply_to_message_id"}, status=400)
+
+    try:
+        sent_message_id = async_to_sync(send_text_to_student)(student_id, text)
+    except Exception:
+        return JsonResponse({"error": "Не вдалося надіслати повідомлення у Telegram"}, status=502)
+
+    message_id = db.save_message(
+        from_user_id=user_id,
+        to_user_id=student_id,
+        group_id=None,
+        message_text=text,
+        message_type="text",
+        file_id=None,
+        reply_to_message_id=reply_to_message_id,
+    )
+    if sent_message_id:
+        db.save_delivery(message_id, student_id, sent_message_id)
+    row = db.get_message_by_id(message_id)
+    return JsonResponse({"message": message_payload(row, user_id, user[4])})
 
 
 @csrf_exempt
