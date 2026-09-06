@@ -958,22 +958,26 @@ function ChatPanel({
       ) : (
         <main className={role === "admin" ? "min-h-0 flex-1 overflow-y-auto bg-[#f6f7fb] px-4 py-4" : "min-h-0 flex-1 overflow-y-auto bg-white px-4 py-4"}>
           <div className="flex min-h-full flex-col justify-end gap-2">
-            {messages.map((message) => (
-              <MessageBubble
-                key={message.id}
-                message={message}
-                role={role}
-                onDelete={() => deleteMessage(message.id)}
-                onReply={() => {
-                  setEditingMessage(null);
-                  setReplyingTo(message);
-                }}
-                onEdit={() => startEdit(message)}
-                onHistory={async () => {
-                  const edits = await loadMessageEdits(message.id);
-                  setEditHistory({ message, edits });
-                }}
-              />
+            {messages.map((message, index) => (
+              <React.Fragment key={message.id}>
+                {index === 0 || messageDayKey(messages[index - 1].created_at) !== messageDayKey(message.created_at) ? (
+                  <ChatDateDivider date={message.created_at} />
+                ) : null}
+                <MessageBubble
+                  message={message}
+                  role={role}
+                  onDelete={() => deleteMessage(message.id)}
+                  onReply={() => {
+                    setEditingMessage(null);
+                    setReplyingTo(message);
+                  }}
+                  onEdit={() => startEdit(message)}
+                  onHistory={async () => {
+                    const edits = await loadMessageEdits(message.id);
+                    setEditHistory({ message, edits });
+                  }}
+                />
+              </React.Fragment>
             ))}
             <div ref={messagesEndRef} />
           </div>
@@ -1121,6 +1125,16 @@ function MessageBubble({ message, role, onDelete, onReply, onEdit, onHistory }) 
         </p>
       </div>
       {(own || adminTeacher) && <Avatar initials="T" size="xs" tone="blue" />}
+    </div>
+  );
+}
+
+function ChatDateDivider({ date }) {
+  return (
+    <div className="my-2 flex items-center justify-center">
+      <span className="rounded-full bg-zinc-200/80 px-3 py-1 text-[11px] font-medium text-zinc-600 shadow-sm">
+        {chatDateLabel(date)}
+      </span>
     </div>
   );
 }
@@ -2020,6 +2034,24 @@ function formatTime(value) {
   const date = new Date(String(value).replace(" ", "T"));
   if (Number.isNaN(date.getTime())) return "";
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function messageDayKey(value) {
+  const date = new Date(String(value || "").replace(" ", "T"));
+  if (Number.isNaN(date.getTime())) return String(value || "").slice(0, 10);
+  return [date.getFullYear(), date.getMonth(), date.getDate()].join("-");
+}
+
+function chatDateLabel(value) {
+  const date = new Date(String(value || "").replace(" ", "T"));
+  if (Number.isNaN(date.getTime())) return String(value || "").slice(0, 10);
+
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (messageDayKey(date) === messageDayKey(today)) return "Сьогодні";
+  if (messageDayKey(date) === messageDayKey(yesterday)) return "Учора";
+  return date.toLocaleDateString("uk-UA", { day: "numeric", month: "long", year: "numeric" });
 }
 
 function formatDateTime(value) {
