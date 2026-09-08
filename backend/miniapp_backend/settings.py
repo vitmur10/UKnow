@@ -105,8 +105,22 @@ TEACHER_MINIAPP_IDS = {
 }
 MINIAPP_DEV_TEACHER_ID = int(os.getenv("MINIAPP_DEV_TEACHER_ID", "0") or "0")
 MINIAPP_DEV_USER_ID = int(os.getenv("MINIAPP_DEV_USER_ID", str(MINIAPP_DEV_TEACHER_ID)) or "0")
+MINIAPP_INIT_DATA_MAX_AGE_SECONDS = int(os.getenv("MINIAPP_INIT_DATA_MAX_AGE_SECONDS", str(60 * 60 * 24)))
+MINIAPP_TOKEN_MAX_AGE_SECONDS = int(os.getenv("MINIAPP_TOKEN_MAX_AGE_SECONDS", str(60 * 60 * 12)))
+MINIAPP_MAX_UPLOAD_BYTES = int(os.getenv("MINIAPP_MAX_UPLOAD_BYTES", str(49 * 1024 * 1024)))
 
 CORS_ALLOWED_ORIGINS = [
     origin.strip() for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if origin.strip()
 ]
 CORS_ALLOW_ALL_ORIGINS = DEBUG and not CORS_ALLOWED_ORIGINS
+
+# httpx includes the complete request URL in INFO logs. Telegram Bot API URLs
+# contain the bot token, so keep routine successful requests out of logs.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "loggers": {
+        "httpx": {"level": "WARNING"},
+        "httpcore": {"level": "WARNING"},
+    },
+}

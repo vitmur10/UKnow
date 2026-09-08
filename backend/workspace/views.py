@@ -1,5 +1,6 @@
 import mimetypes
 import uuid
+import logging
 from pathlib import Path
 
 import httpx
@@ -18,6 +19,9 @@ from .telegram_auth import verify_ws_token
 from .sqlite_payloads import dialog_payload, message_payload
 
 
+logger = logging.getLogger(__name__)
+
+
 @csrf_exempt
 @require_POST
 def miniapp_auth(request):
@@ -26,7 +30,11 @@ def miniapp_auth(request):
         dev_user_id = settings.MINIAPP_DEV_USER_ID
         user = db.get_user(dev_user_id)
         if user and user[4] in ("teacher", "admin") and bool(user[9]):
-            return JsonResponse({"ws_token": issue_ws_token(dev_user_id), "dev_user_id": dev_user_id})
+            return JsonResponse({
+                "ws_token": issue_ws_token(dev_user_id),
+                "expires_in": settings.MINIAPP_TOKEN_MAX_AGE_SECONDS,
+                "dev_user_id": dev_user_id,
+            })
 
     try:
         payload = validate_telegram_init_data(init_data)
@@ -40,7 +48,10 @@ def miniapp_auth(request):
     if not allowed_by_db and not allowed_by_env:
         return JsonResponse({"error": "Teacher access required"}, status=403)
 
-    return JsonResponse({"ws_token": issue_ws_token(telegram_id)})
+    return JsonResponse({
+        "ws_token": issue_ws_token(telegram_id),
+        "expires_in": settings.MINIAPP_TOKEN_MAX_AGE_SECONDS,
+    })
 
 
 @csrf_exempt
@@ -366,6 +377,9 @@ def miniapp_upload_attachment(request):
     upload = request.FILES.get("file")
     if not upload:
         return JsonResponse({"error": "File required"}, status=400)
+    if upload.size > settings.MINIAPP_MAX_UPLOAD_BYTES:
+        max_mb = settings.MINIAPP_MAX_UPLOAD_BYTES // (1024 * 1024)
+        return JsonResponse({"error": f"Файл завеликий. Максимальний розмір — {max_mb} МБ"}, status=413)
 
     original_name = Path(upload.name or "attachment").name
     mime_type = upload.content_type or mimetypes.guess_type(original_name)[0] or "application/octet-stream"
@@ -388,6 +402,20 @@ def miniapp_upload_attachment(request):
         return JsonResponse({"error": "Invalid reply_to_message_id"}, status=400)
     reply_to_tg_message_id = _resolve_reply_to_tg_message_id(reply_to_message_id, student_id)
 
+    try:
+        sent_message_id = async_to_sync(send_attachment_to_student)(
+            student_id,
+            str(media_path),
+            kind,
+            caption,
+            reply_to_tg_message_id,
+        )
+    except Exception as exc:
+        media_path.unlink(missing_ok=True)
+        logger.warning("Telegram attachment delivery failed for student %s: %s", student_id, exc)
+        return JsonResponse({"error": "Не вдалося надіслати файл у Telegram. Спробуйте ще раз"}, status=502)
+
+    # A failed Telegram request must not leave a blank message in chat history.
     message_id = db.save_message(
         from_user_id=user_id,
         to_user_id=student_id,
@@ -399,16 +427,6 @@ def miniapp_upload_attachment(request):
         original_filename=original_name,
         mime_type=mime_type,
     )
-    try:
-        sent_message_id = async_to_sync(send_attachment_to_student)(
-            student_id,
-            str(media_path),
-            kind,
-            caption,
-            reply_to_tg_message_id,
-        )
-    except Exception:
-        return JsonResponse({"error": "Не вдалося надіслати файл у Telegram"}, status=502)
     if sent_message_id:
         db.save_delivery(message_id, student_id, sent_message_id)
 

@@ -77,11 +77,56 @@ export default function TeacherWorkspace() {
   const recorderRef = useRef(null);
   const chunksRef = useRef([]);
   const fileInputRef = useRef(null);
+  const authRequestRef = useRef(null);
 
   const selectedChat = useMemo(
     () => chats.find((chat) => chat.id === selectedChatId) || null,
     [chats, selectedChatId],
   );
+
+  const authenticateAndBootstrap = React.useCallback(async () => {
+    if (authRequestRef.current) return authRequestRef.current;
+
+    const request = (async () => {
+      const initData = window.Telegram?.WebApp?.initData || "";
+      const urlParams = new URLSearchParams(window.location.search);
+      const startParam = window.Telegram?.WebApp?.initDataUnsafe?.start_param || urlParams.get("startapp") || urlParams.get("chat") || "";
+      const response = await fetch(`${API_BASE}/miniapp/auth/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ initData }),
+      });
+      if (!response.ok) throw new Error(await readApiError(response, "Помилка авторизації Mini App"));
+
+      const { ws_token: token } = await response.json();
+      const bootstrapResponse = await fetch(`${API_BASE}/miniapp/bootstrap/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ token }),
+      });
+      if (!bootstrapResponse.ok) throw new Error(await readApiError(bootstrapResponse, "Не вдалося завантажити Mini App"));
+
+      const bootstrap = await bootstrapResponse.json();
+      setRole(bootstrap.role || "teacher");
+      setChats(bootstrap.chats || []);
+      setLessons(bootstrap.lessons || []);
+      setTeachers(bootstrap.teachers || []);
+      setMessages((current) => current.length ? mergeMessages(current, bootstrap.messages || []) : (bootstrap.messages || []));
+      if (bootstrap.role === "admin") setActiveSection(getStoredAdminSection());
+      const initialChatId = chatIdFromStartParam(startParam);
+      if (initialChatId && !selectedChatIdRef.current) setSelectedChatId(initialChatId);
+      setAuthError("");
+      setWsToken(token);
+      return token;
+    })();
+
+    authRequestRef.current = request;
+    try {
+      return await request;
+    } finally {
+      authRequestRef.current = null;
+    }
+  }, []);
 
   const navSections = useMemo(() => (
     role === "admin"
@@ -135,75 +180,64 @@ export default function TeacherWorkspace() {
   }, [activeSection, role]);
 
   useEffect(() => {
+    window.Telegram?.WebApp?.ready();
+    const refreshAuthorization = () => authenticateAndBootstrap().catch((error) => {
+      setAuthError(error.message || "Не вдалося відкрити Mini App");
+      setStatus("offline");
+    });
+    refreshAuthorization();
+    const refreshTimer = window.setInterval(() => {
+      authenticateAndBootstrap().catch(() => {
+        // Keep the current valid session; a 401/4401 will request a hard refresh.
+      });
+    }, 30 * 60 * 1000);
+
+    return () => {
+      window.clearInterval(refreshTimer);
+    };
+  }, [authenticateAndBootstrap]);
+
+  useEffect(() => {
+    if (!wsToken) return undefined;
     let cancelled = false;
     let reconnectTimer = null;
+    let reconnectAttempt = 0;
 
-    function openSocket(wsTokenValue) {
-      const ws = new WebSocket(`${WS_BASE}/ws/teacher/?token=${encodeURIComponent(wsTokenValue)}`);
+    function openSocket() {
+      const ws = new WebSocket(`${WS_BASE}/ws/teacher/?token=${encodeURIComponent(wsToken)}`);
       wsRef.current = ws;
-
-      ws.onopen = () => setStatus("online");
-      ws.onclose = () => {
+      ws.onopen = () => {
+        reconnectAttempt = 0;
+        setStatus("online");
+      };
+      ws.onclose = (event) => {
         setStatus("offline");
-        if (!cancelled) {
-          reconnectTimer = window.setTimeout(() => openSocket(wsTokenValue), 1500);
+        if (cancelled) return;
+        if (event.code === 4401) {
+          authenticateAndBootstrap().catch((error) => setAuthError(error.message || "Потрібна повторна авторизація в Telegram"));
+          return;
         }
+        reconnectAttempt += 1;
+        const delay = Math.min(30000, 1000 * (2 ** Math.min(reconnectAttempt, 5)));
+        reconnectTimer = window.setTimeout(openSocket, delay);
       };
       ws.onerror = () => setStatus("offline");
-      ws.onmessage = (event) => handleWsMessage(JSON.parse(event.data));
-    }
-
-    async function connect() {
-      try {
-        const initData = window.Telegram?.WebApp?.initData || "";
-        const urlParams = new URLSearchParams(window.location.search);
-        const startParam = window.Telegram?.WebApp?.initDataUnsafe?.start_param || urlParams.get("startapp") || urlParams.get("chat") || "";
-        const response = await fetch(`${API_BASE}/miniapp/auth/`, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({ initData }),
-        });
-
-        if (!response.ok) throw new Error(await readApiError(response, "Помилка авторизації Mini App"));
-        const { ws_token } = await response.json();
-        setWsToken(ws_token);
-        setAuthError("");
-        if (cancelled) return;
-
-        const bootstrapResponse = await fetch(`${API_BASE}/miniapp/bootstrap/`, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({ token: ws_token }),
-        });
-        if (!bootstrapResponse.ok) throw new Error(await readApiError(bootstrapResponse, "Не вдалося завантажити Mini App"));
-        const bootstrap = await bootstrapResponse.json();
-        const initialChatId = chatIdFromStartParam(startParam);
-        setRole(bootstrap.role || "teacher");
-        setChats(bootstrap.chats || []);
-        setLessons(bootstrap.lessons || []);
-        setTeachers(bootstrap.teachers || []);
-        setMessages(bootstrap.messages || []);
-        if (bootstrap.role === "admin") {
-          setActiveSection(getStoredAdminSection());
+      ws.onmessage = (event) => {
+        try {
+          handleWsMessage(JSON.parse(event.data));
+        } catch {
+          // Ignore malformed events without taking down the live connection.
         }
-        if (initialChatId) setSelectedChatId(initialChatId);
-
-        openSocket(ws_token);
-      } catch (error) {
-        setAuthError(error.message || "Не вдалося відкрити Mini App");
-        setStatus("offline");
-      }
+      };
     }
 
-    window.Telegram?.WebApp?.ready();
-    connect();
-
+    openSocket();
     return () => {
       cancelled = true;
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
-      wsRef.current?.close();
+      ws.close();
     };
-  }, []);
+  }, [authenticateAndBootstrap, wsToken]);
 
   useEffect(() => {
     if (!wsToken) return undefined;
@@ -217,8 +251,17 @@ export default function TeacherWorkspace() {
           body: new URLSearchParams({ token: wsToken }),
         });
         if (response.status === 401 || response.status === 403) {
-          setAuthError(await readApiError(response, "Доступ до Mini App відхилено"));
-          setStatus("offline");
+          if (response.status === 401) {
+            try {
+              await authenticateAndBootstrap();
+            } catch (error) {
+              setAuthError(error.message || "Потрібна повторна авторизація в Telegram");
+              setStatus("offline");
+            }
+          } else {
+            setAuthError(await readApiError(response, "Доступ до Mini App відхилено"));
+            setStatus("offline");
+          }
           return;
         }
         if (!response.ok || cancelled) return;
@@ -234,15 +277,13 @@ export default function TeacherWorkspace() {
       }
     }
 
-    const intervalId = window.setInterval(refreshBootstrap, 3000);
-    window.addEventListener("focus", refreshBootstrap);
+    const intervalId = window.setInterval(refreshBootstrap, 15000);
 
     return () => {
       cancelled = true;
       window.clearInterval(intervalId);
-      window.removeEventListener("focus", refreshBootstrap);
     };
-  }, [wsToken]);
+  }, [authenticateAndBootstrap, wsToken]);
 
   useEffect(() => {
     if (!selectedChatId || status !== "online") return;
@@ -546,9 +587,14 @@ export default function TeacherWorkspace() {
     setMessages((current) => mergeMessages(current, history));
   }
 
+  const showMobileNavigation = !selectedChatId;
+
   return (
-    <div className="h-[100dvh] w-full overflow-x-hidden bg-[#eef2f5] text-[#111827]">
-      <div className="mx-auto grid h-full w-full min-w-0 max-w-6xl overflow-hidden bg-white shadow-sm md:grid-cols-[380px_minmax(0,1fr)] md:border-x md:border-zinc-200">
+    <div className="relative h-[100dvh] w-full overflow-hidden bg-[#eef2f5] text-[#111827]">
+      <div className={[
+        "mx-auto grid h-full w-full min-w-0 max-w-6xl overflow-hidden bg-white shadow-sm md:grid-cols-[380px_minmax(0,1fr)] md:border-x md:border-zinc-200 md:pb-0",
+        showMobileNavigation ? "pb-[calc(4rem+env(safe-area-inset-bottom))]" : "",
+      ].join(" ")}>
         <ChatList
           role={role}
           chats={filteredChats}
@@ -625,7 +671,23 @@ export default function TeacherWorkspace() {
           />
         )}
       </div>
-  </div>
+      {showMobileNavigation && (
+        <nav className={`absolute inset-x-0 bottom-0 z-30 grid h-[calc(4rem+env(safe-area-inset-bottom))] border-t border-zinc-100 bg-white pb-[env(safe-area-inset-bottom)] text-[11px] text-zinc-500 shadow-[0_-2px_8px_rgba(0,0,0,0.04)] md:hidden ${navSections.length === 5 ? "grid-cols-5" : "grid-cols-4"}`}>
+          {navSections.map((item) => (
+            <BottomNavItem
+              key={item.id}
+              active={activeSection === item.id}
+              icon={item.icon}
+              label={item.label}
+              onClick={() => {
+                setSelectedChatId(null);
+                setActiveSection(item.id);
+              }}
+            />
+          ))}
+        </nav>
+      )}
+    </div>
   );
 }
 
@@ -796,7 +858,7 @@ function ChatList({
           </button>
         ))}
       </div>
-      <nav className={`grid h-16 border-t border-zinc-100 bg-white text-[11px] text-zinc-500 ${navSections.length === 5 ? "grid-cols-5" : "grid-cols-4"}`}>
+      <nav className={`hidden h-16 shrink-0 border-t border-zinc-100 bg-white text-[11px] text-zinc-500 md:grid ${navSections.length === 5 ? "grid-cols-5" : "grid-cols-4"}`}>
         {navSections.map((item) => (
           <BottomNavItem
             key={item.id}
@@ -846,7 +908,7 @@ function ChatPanel({
   const [adminTab, setAdminTab] = useState("dialog");
   const [editHistory, setEditHistory] = useState(null);
   const messagesEndRef = useRef(null);
-  const fileMessages = useMemo(() => messages.filter((message) => message.kind !== "text"), [messages]);
+  const fileMessages = useMemo(() => messages.filter((message) => message.kind !== "text" && message.media_url), [messages]);
   const eventMessages = useMemo(() => messages.filter((message) => (
     message.possible_contact || message.is_deleted || message.edited_at
   )), [messages]);
@@ -1013,6 +1075,7 @@ function ChatPanel({
             ref={fileInputRef}
             type="file"
             multiple
+            accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip"
             className="hidden"
             onChange={(event) => sendFiles(event.target.files)}
           />
@@ -1027,14 +1090,29 @@ function ChatPanel({
           >
             <Paperclip size={18} />
           </button>
-          <input
+          <textarea
             value={text}
             onChange={(event) => setText(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") sendText();
+            onPaste={(event) => {
+              const pastedImages = Array.from(event.clipboardData?.items || [])
+                .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+                .map((item) => item.getAsFile())
+                .filter(Boolean);
+              if (pastedImages.length) {
+                event.preventDefault();
+                sendFiles(pastedImages);
+              }
             }}
-            className="h-8 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-zinc-500"
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault();
+                sendText();
+              }
+            }}
+            rows={1}
+            className="max-h-28 min-h-8 min-w-0 flex-1 resize-none overflow-y-auto bg-transparent py-1.5 text-sm leading-5 outline-none placeholder:text-zinc-500"
             placeholder="Напишіть повідомлення"
+            aria-label="Текст повідомлення. Enter — новий рядок, Ctrl або Command + Enter — надіслати"
           />
           <button
             onClick={toggleRecording}
@@ -1158,19 +1236,37 @@ function MessageContent({ message, role }) {
       </div>
     );
   }
+  if (message.kind !== "text" && !message.media_url) {
+    return (
+      <div className="space-y-1">
+        <p className="whitespace-pre-wrap break-words">{message.text || "Вкладення недоступне"}</p>
+        <p className="text-xs opacity-70">Файл не був збережений у старій версії бота</p>
+      </div>
+    );
+  }
   if (message.kind === "voice" || message.kind === "audio") {
-    return <audio controls src={message.media_url || message.voice_url} className="w-56 max-w-full" />;
+    return (
+      <div className="space-y-2">
+        <audio controls src={message.media_url || message.voice_url} className="w-56 max-w-full" />
+        {message.text && <LinkifiedText text={message.text} />}
+      </div>
+    );
   }
   if (message.kind === "photo") {
     return (
       <a href={message.media_url} target="_blank" rel="noreferrer" className="block">
         <img src={message.media_url} alt={message.filename || "Фото"} className="max-h-72 rounded-lg object-contain" />
-        {message.text && <p className="mt-2 whitespace-pre-wrap break-words">{message.text}</p>}
+        {message.text && <div className="mt-2"><LinkifiedText text={message.text} /></div>}
       </a>
     );
   }
   if (message.kind === "video") {
-    return <video controls src={message.media_url} className="max-h-72 max-w-full rounded-lg" />;
+    return (
+      <div className="space-y-2">
+        <video controls src={message.media_url} className="max-h-72 max-w-full rounded-lg" />
+        {message.text && <LinkifiedText text={message.text} />}
+      </div>
+    );
   }
   if (message.kind !== "text") {
     const isPdf = String(message.mime_type || "").toLowerCase().includes("pdf") || /\.pdf$/i.test(message.filename || "");
@@ -1189,10 +1285,37 @@ function MessageContent({ message, role }) {
             <span className="break-all">{message.filename || mediaLabel(message.kind)}</span>
           </a>
         )}
+        {message.text && <LinkifiedText text={message.text} />}
       </div>
     );
   }
-  return <p className="whitespace-pre-wrap break-words">{message.text}</p>;
+  return <LinkifiedText text={message.text} />;
+}
+
+function LinkifiedText({ text }) {
+  const value = String(text || "");
+  const parts = value.split(/((?:https?:\/\/|www\.|t\.me\/)[^\s<]+)/gi);
+  return (
+    <p className="whitespace-pre-wrap break-words">
+      {parts.map((part, index) => {
+        if (!/^(?:https?:\/\/|www\.|t\.me\/)/i.test(part)) {
+          return <React.Fragment key={index}>{part}</React.Fragment>;
+        }
+        const match = part.match(/^(.*?)([),.!?;:]*)$/);
+        const url = match?.[1] || part;
+        const trailing = match?.[2] || "";
+        const href = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+        return (
+          <React.Fragment key={index}>
+            <a href={href} target="_blank" rel="noreferrer" className="font-medium text-[#087fab] underline underline-offset-2">
+              {url}
+            </a>
+            {trailing}
+          </React.Fragment>
+        );
+      })}
+    </p>
+  );
 }
 
 function StudentInfo({ chat, close }) {
@@ -2074,19 +2197,19 @@ function languageFlag(language) {
 
 function formatTime(value) {
   if (!value) return "";
-  const date = new Date(String(value).replace(" ", "T"));
+  const date = parseUtcTimestamp(value);
   if (Number.isNaN(date.getTime())) return "";
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 function messageDayKey(value) {
-  const date = new Date(String(value || "").replace(" ", "T"));
+  const date = parseUtcTimestamp(value);
   if (Number.isNaN(date.getTime())) return String(value || "").slice(0, 10);
   return [date.getFullYear(), date.getMonth(), date.getDate()].join("-");
 }
 
 function chatDateLabel(value) {
-  const date = new Date(String(value || "").replace(" ", "T"));
+  const date = parseUtcTimestamp(value);
   if (Number.isNaN(date.getTime())) return String(value || "").slice(0, 10);
 
   const today = new Date();
@@ -2099,7 +2222,7 @@ function chatDateLabel(value) {
 
 function formatDateTime(value) {
   if (!value) return "";
-  const date = new Date(String(value).replace(" ", "T"));
+  const date = parseUtcTimestamp(value);
   if (Number.isNaN(date.getTime())) return "";
   return date.toLocaleString([], {
     day: "2-digit",
@@ -2108,6 +2231,13 @@ function formatDateTime(value) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function parseUtcTimestamp(value) {
+  const normalized = String(value || "").trim().replace(" ", "T");
+  if (!normalized) return new Date(Number.NaN);
+  const includesTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized);
+  return new Date(includesTimezone ? normalized : `${normalized}Z`);
 }
 
 function eventTitle(message) {

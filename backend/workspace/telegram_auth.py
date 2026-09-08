@@ -7,8 +7,8 @@ from urllib.parse import parse_qsl
 from django.conf import settings
 from django.core import signing
 
-INIT_DATA_MAX_AGE_SECONDS = 60 * 60
-WS_TOKEN_MAX_AGE_SECONDS = 60 * 10
+INIT_DATA_MAX_AGE_SECONDS = settings.MINIAPP_INIT_DATA_MAX_AGE_SECONDS
+WS_TOKEN_MAX_AGE_SECONDS = settings.MINIAPP_TOKEN_MAX_AGE_SECONDS
 
 
 class TelegramAuthError(Exception):
@@ -45,4 +45,3 @@ def issue_ws_token(teacher_telegram_id: int) -> str:
 def verify_ws_token(token: str) -> int:
     data = signing.loads(token, salt="miniapp-ws", max_age=WS_TOKEN_MAX_AGE_SECONDS)
     return int(data["teacher_id"])
-

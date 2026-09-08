@@ -1146,9 +1146,32 @@ class Database:
     def get_teacher_students(self, teacher_id):
         conn = sqlite3.connect(self.db_name)
         cursor = conn.cursor()
-        cursor.execute('''SELECT u.user_id, u.username, u.first_name, u.last_name, u.role, u.phone, u.language FROM users u 
-                            JOIN assignments a ON u.user_id = a.student_id 
-                            WHERE a.teacher_id = ? AND a.is_active = 1''', (teacher_id,))
+        cursor.execute('''WITH teacher_students AS (
+                              SELECT student_id
+                              FROM assignments
+                              WHERE teacher_id = ? AND is_active = 1
+                              UNION
+                              SELECT gm.student_id
+                              FROM groups g
+                              JOIN group_members gm ON gm.group_id = g.id
+                              WHERE g.teacher_id = ? AND g.is_active = 1 AND gm.is_active = 1
+                              UNION
+                              SELECT student_id
+                              FROM lessons
+                              WHERE teacher_id = ? AND student_id IS NOT NULL
+                              UNION
+                              SELECT gm.student_id
+                              FROM lessons l
+                              JOIN group_members gm ON gm.group_id = l.group_id
+                              WHERE l.teacher_id = ? AND l.group_id IS NOT NULL AND gm.is_active = 1
+                          )
+                          SELECT DISTINCT u.user_id, u.username, u.first_name, u.last_name,
+                                          u.role, u.phone, u.language
+                          FROM teacher_students ts
+                          JOIN users u ON u.user_id = ts.student_id
+                          WHERE u.role = 'student' AND u.is_active = 1
+                          ORDER BY u.first_name COLLATE NOCASE, u.last_name COLLATE NOCASE''',
+                       (teacher_id, teacher_id, teacher_id, teacher_id))
         result = cursor.fetchall()
         conn.close()
         return result

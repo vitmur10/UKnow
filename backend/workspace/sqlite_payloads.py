@@ -1,4 +1,17 @@
-from django.conf import settings
+from datetime import datetime, timezone
+
+def utc_iso(value) -> str:
+    """Serialize SQLite UTC timestamps with an explicit timezone marker."""
+    if not value:
+        return ""
+    text = str(value).strip().replace(" ", "T")
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def initials(first_name: str, last_name: str) -> str:
@@ -47,18 +60,10 @@ def message_payload(row, teacher_id: int, viewer_role: str | None = None):
     ] if part).strip()
 
     media_url = ""
-    if kind == "voice":
-        media_url = (
-            f"{settings.MEDIA_URL}miniapp_voice/{file_id}"
-            if file_id.startswith("miniapp-")
-            else f"/api/messages/{message_id}/voice/"
-        )
-    elif kind != "text" and file_id:
-        media_url = (
-            f"{settings.MEDIA_URL}miniapp_uploads/{file_id}"
-            if file_id.startswith("miniapp-")
-            else f"/api/messages/{message_id}/media/"
-        )
+    if kind != "text" and file_id:
+        # Direct /media links disappear when DEBUG is off. Stream every kind
+        # through the endpoint that supports Telegram and local uploads.
+        media_url = f"/api/messages/{message_id}/media/"
 
     return {
         "id": message_id,
@@ -77,8 +82,8 @@ def message_payload(row, teacher_id: int, viewer_role: str | None = None):
         "is_deleted": is_deleted,
         "deleted_by": row[12] if len(row) > 12 else None,
         "deleted_by_name": deleted_by_name,
-        "deleted_at": str(row[13] or "") if len(row) > 13 else "",
-        "edited_at": str(row[14] or "") if len(row) > 14 else "",
+        "deleted_at": utc_iso(row[13]) if len(row) > 13 else "",
+        "edited_at": utc_iso(row[14]) if len(row) > 14 else "",
         "edited_by": row[15] if len(row) > 15 else None,
         "edited_by_name": edited_by_name,
         "reply_to_message_id": row[16] if len(row) > 16 else None,
@@ -87,7 +92,7 @@ def message_payload(row, teacher_id: int, viewer_role: str | None = None):
             "kind": reply_kind or "",
         } if (len(row) > 16 and row[16]) else None,
         "possible_contact": bool(row[17]) if len(row) > 17 else False,
-        "created_at": str(row[6]),
+        "created_at": utc_iso(row[6]),
     }
 
 
@@ -114,7 +119,7 @@ def dialog_payload(row):
         "waiting_reply": last_sender == "student" and bool(timestamp),
         "initials": initials(first_name, last_name),
         "username": username or "",
-        "last_message_at": str(timestamp or ""),
+        "last_message_at": utc_iso(timestamp),
         "unread_count": unread_count or 0,
         "language": language or "",
         "level": level or "",

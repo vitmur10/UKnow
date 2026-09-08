@@ -410,6 +410,21 @@ def _detect_media(msg):
     return 'text', None
 
 
+def _media_metadata(msg, media_type):
+    """Preserve Telegram attachment details for Mini App previews."""
+    media = getattr(msg, media_type, None)
+    if media_type == 'photo':
+        return None, 'image/jpeg'
+    if media_type == 'video_note':
+        return None, 'video/mp4'
+    if media_type == 'sticker':
+        return None, getattr(media, 'mime_type', None) or 'image/webp'
+    return (
+        getattr(media, 'file_name', None),
+        getattr(media, 'mime_type', None),
+    )
+
+
 def _build_reply_markup(sender_role: str, sender_id: int, kind: str, peer_id: int,
                         sender_first_name: str, group_name: str):
     """Кнопка '↩️ Відповісти' для отримувача."""
@@ -498,6 +513,7 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     # --- Вміст ---
     media_type, file_id = _detect_media(msg)
+    original_filename, mime_type = _media_metadata(msg, media_type)
     content_text = (msg.text or msg.caption or "").strip()
 
     if media_type == 'sticker':
@@ -517,7 +533,9 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
             group_id=group_id_for_db,
             message_text=content_text,
             message_type=media_type,
-            file_id=file_id
+            file_id=file_id,
+            original_filename=original_filename,
+            mime_type=mime_type,
         )
         # Фіксуємо оригінал у чаті відправника (щоб /del міг знайти повідомлення)
         db.save_delivery(msg_db_id, sender_id, msg.message_id)

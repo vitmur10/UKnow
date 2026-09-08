@@ -29,7 +29,7 @@ class TeacherChatConsumer(AsyncJsonWebsocketConsumer):
         try:
             self.teacher_tg_id = verify_ws_token(token)
             teacher = await sync_to_async(db.get_user)(self.teacher_tg_id)
-            if not teacher or teacher[4] not in ("teacher", "admin"):
+            if not teacher or teacher[4] not in ("teacher", "admin") or not bool(teacher[9]):
                 raise PermissionError
             self.viewer_role = teacher[4]
         except Exception:
@@ -105,6 +105,12 @@ class TeacherChatConsumer(AsyncJsonWebsocketConsumer):
         voice_path = media_dir / filename
         voice_path.write_bytes(audio_bytes)
 
+        try:
+            sent_message_id = await send_voice_to_student(student_id, str(voice_path))
+        except Exception:
+            voice_path.unlink(missing_ok=True)
+            await self.send_json({"type": "error", "message": "Не вдалося надіслати голосове повідомлення"})
+            return
         message_id = await sync_to_async(db.save_message)(
             from_user_id=self.teacher_tg_id,
             to_user_id=student_id,
@@ -116,7 +122,6 @@ class TeacherChatConsumer(AsyncJsonWebsocketConsumer):
             original_filename="voice.webm",
             mime_type="audio/webm",
         )
-        sent_message_id = await send_voice_to_student(student_id, str(voice_path))
         if sent_message_id:
             await sync_to_async(db.save_delivery)(message_id, student_id, sent_message_id)
 
@@ -134,6 +139,9 @@ class TeacherChatConsumer(AsyncJsonWebsocketConsumer):
         else:
             header, raw_value = "", data_url
         file_bytes = base64.b64decode(raw_value)
+        if len(file_bytes) > settings.MINIAPP_MAX_UPLOAD_BYTES:
+            await self.send_json({"type": "error", "message": "Файл завеликий"})
+            return
         original_name = (content.get("filename") or "attachment").replace("\\", "_").replace("/", "_")
         mime_type = content.get("mime_type") or ""
         if not mime_type and header.startswith("data:"):
@@ -150,6 +158,18 @@ class TeacherChatConsumer(AsyncJsonWebsocketConsumer):
         caption = (content.get("caption") or "").strip()
         reply_to_message_id = content.get("reply_to_message_id")
         reply_to_tg_message_id = await sync_to_async(db.get_delivery_tg_message_id)(reply_to_message_id, student_id) if reply_to_message_id else None
+        try:
+            sent_message_id = await send_attachment_to_student(
+                student_id,
+                str(media_path),
+                kind,
+                caption,
+                reply_to_tg_message_id,
+            )
+        except Exception:
+            media_path.unlink(missing_ok=True)
+            await self.send_json({"type": "error", "message": "Не вдалося надіслати файл у Telegram"})
+            return
         message_id = await sync_to_async(db.save_message)(
             from_user_id=self.teacher_tg_id,
             to_user_id=student_id,
@@ -160,13 +180,6 @@ class TeacherChatConsumer(AsyncJsonWebsocketConsumer):
             reply_to_message_id=content.get("reply_to_message_id"),
             original_filename=original_name,
             mime_type=mime_type,
-        )
-        sent_message_id = await send_attachment_to_student(
-            student_id,
-            str(media_path),
-            kind,
-            caption,
-            reply_to_tg_message_id,
         )
         if sent_message_id:
             await sync_to_async(db.save_delivery)(message_id, student_id, sent_message_id)
