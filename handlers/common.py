@@ -51,7 +51,7 @@ async def miniapp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_manager_contact_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отправляет кнопку для прямого перехода к чату с менеджером"""
     keyboard = [
-        [InlineKeyboardButton("📞 Написати менеджеру", url="https://t.me/UKnow_Online_School")]
+        [InlineKeyboardButton("📞 Написати менеджеру", url="https://t.me/UKnow_Admin")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
