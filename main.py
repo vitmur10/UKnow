@@ -340,7 +340,7 @@ def main():
         CallbackQueryHandler(student_callbacks, pattern='^(student_schedule|back_student_schedule)'))
 
     application.add_handler(
-        CallbackQueryHandler(teacher_callbacks, pattern='^(inbox|schedule|back_schedule|back_to_schedule)'))
+        CallbackQueryHandler(teacher_callbacks, pattern='^(inbox|schedule|back_schedule|back_to_schedule|teacher_groups_page_)'))
 
     application.add_handler(CallbackQueryHandler(
         admin_callbacks,

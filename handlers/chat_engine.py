@@ -296,33 +296,60 @@ async def teacher_message_students(update: Update, context: ContextTypes.DEFAULT
     )
 
 
-async def teacher_message_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показує викладачеві тільки групи для чату, бо direct-чати винесені в Mini App."""
+TEACHER_GROUP_CHAT_PAGE_SIZE = 8
+
+
+async def _render_teacher_group_picker(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0):
+    """Render a paginated group picker for a teacher's group chat."""
     user_id = update.effective_user.id
     user = db.get_user(user_id)
 
     if not user or user[4] != 'teacher':
-        await update.message.reply_text("Ця функція доступна лише викладачам.")
+        if update.callback_query:
+            await update.callback_query.answer("Ця функція доступна лише викладачам.", show_alert=True)
+        else:
+            await update.message.reply_text("Ця функція доступна лише викладачам.")
         return
 
     groups = db.get_teacher_groups(user_id)
     if not groups:
-        await update.message.reply_text("У вас ще немає груп.")
+        if update.callback_query:
+            await update.callback_query.edit_message_text("У вас ще немає груп.")
+        else:
+            await update.message.reply_text("У вас ще немає груп.")
         return
 
+    total_pages = max(1, (len(groups) + TEACHER_GROUP_CHAT_PAGE_SIZE - 1) // TEACHER_GROUP_CHAT_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+    start = page * TEACHER_GROUP_CHAT_PAGE_SIZE
     keyboard = []
-    for group in groups:
+    for group in groups[start:start + TEACHER_GROUP_CHAT_PAGE_SIZE]:
         keyboard.append([InlineKeyboardButton(
             f"👥 {group[1]} ({group[3]})",
             callback_data=f"teacher_chat_group_{group[0]}"
         )])
 
+    if total_pages > 1:
+        navigation = []
+        if page > 0:
+            navigation.append(InlineKeyboardButton("◀️", callback_data=f"teacher_group_chat_page_{page - 1}"))
+        navigation.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="ignore"))
+        if page < total_pages - 1:
+            navigation.append(InlineKeyboardButton("▶️", callback_data=f"teacher_group_chat_page_{page + 1}"))
+        keyboard.append(navigation)
+
     keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data="cancel_teacher_chat")])
 
-    await update.message.reply_text(
-        "💬 Оберіть групу:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    text = f"💬 Оберіть групу · {page + 1}/{total_pages}:"
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def teacher_message_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показує викладачеві тільки групи для чату, бо direct-чати винесені в Mini App."""
+    await _render_teacher_group_picker(update, context)
 
 
 async def teacher_quick_reply_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -822,6 +849,14 @@ async def chat_engine_callbacks(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()
 
     # --- СТАРТ ЧАТІВ (нова логіка: user_data + pin, без ConversationHandler) ---
+    if data.startswith("teacher_group_chat_page_"):
+        try:
+            page = int(data.rsplit("_", 1)[1])
+        except ValueError:
+            return
+        await _render_teacher_group_picker(update, context, page)
+        return
+
     if data.startswith("teacher_chat_student_"):
         student_id = int(data.split("_")[3])
         try:

@@ -185,21 +185,36 @@ async def teacher_inbox_open(query, context, student_id: int):
     )
 
 
-async def show_teacher_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
+TEACHER_GROUPS_PAGE_SIZE = 5
+
+
+async def _render_teacher_groups(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0):
+    """Render one compact page of the teacher's groups."""
     user_id = update.effective_user.id
     user = db.get_user(user_id)
 
     if not user or user[4] != 'teacher':
-        await update.message.reply_text("Ця функція доступна лише викладачам.")
+        if update.callback_query:
+            await update.callback_query.answer("Ця функція доступна лише викладачам.", show_alert=True)
+        else:
+            await update.message.reply_text("Ця функція доступна лише викладачам.")
         return
 
     groups = db.get_teacher_groups(user_id)
     if not groups:
-        await update.message.reply_text("У вас ще немає груп.")
+        if update.callback_query:
+            await update.callback_query.edit_message_text("У вас ще немає груп.")
+        else:
+            await update.message.reply_text("У вас ще немає груп.")
         return
 
-    text = "👥 Мої групи:\n\n"
-    for group in groups:
+    total_pages = max(1, (len(groups) + TEACHER_GROUPS_PAGE_SIZE - 1) // TEACHER_GROUPS_PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+    start = page * TEACHER_GROUPS_PAGE_SIZE
+    page_groups = groups[start:start + TEACHER_GROUPS_PAGE_SIZE]
+
+    text = f"👥 Мої групи · сторінка {page + 1}/{total_pages}:\n\n"
+    for group in page_groups:
         members = db.get_group_members(group[0])
         text += f"📚 {group[1]} ({group[3]})\n"
         text += f"👥 Учасників: {len(members)}\n"
@@ -210,7 +225,25 @@ async def show_teacher_groups(update: Update, context: ContextTypes.DEFAULT_TYPE
                 text += f" і ще {len(members) - 3}"
         text += "\n\n"
 
-    await update.message.reply_text(text)
+    keyboard = []
+    if total_pages > 1:
+        navigation = []
+        if page > 0:
+            navigation.append(InlineKeyboardButton("◀️", callback_data=f"teacher_groups_page_{page - 1}"))
+        navigation.append(InlineKeyboardButton(f"{page + 1}/{total_pages}", callback_data="ignore"))
+        if page < total_pages - 1:
+            navigation.append(InlineKeyboardButton("▶️", callback_data=f"teacher_groups_page_{page + 1}"))
+        keyboard.append(navigation)
+
+    markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, reply_markup=markup)
+    else:
+        await update.message.reply_text(text, reply_markup=markup)
+
+
+async def show_teacher_groups(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _render_teacher_groups(update, context)
 
 
 async def show_teacher_chat_history(update: Update, context: ContextTypes.DEFAULT_TYPE, teacher_id):
@@ -276,6 +309,13 @@ async def teacher_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
     user_id = query.from_user.id
+    if data.startswith("teacher_groups_page_"):
+        try:
+            page = int(data.rsplit("_", 1)[1])
+        except ValueError:
+            return
+        await _render_teacher_groups(update, context, page)
+        return
     # --- 📬 ВХІДНІ (INBOX) ---
     if data.startswith("inbox_open_"):
         student_id = int(data.split("_")[2])
