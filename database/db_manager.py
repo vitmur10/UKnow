@@ -13,9 +13,15 @@ class Database:
         self.db_name = str(db_path)
         self.init_db()
 
+    def _connect(self):
+        conn = sqlite3.connect(self.db_name, timeout=5)
+        conn.execute("PRAGMA busy_timeout=5000")
+        return conn
+
     def init_db(self):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL;")
 
         cursor.execute('''CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -167,7 +173,7 @@ class Database:
 
     def cancel_lesson(self, lesson_id):
         """Скасувати урок"""
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("UPDATE lessons SET status = 'cancelled' WHERE id = ?", (lesson_id,))
         conn.commit()
@@ -176,7 +182,7 @@ class Database:
 
     def get_admin_list(self):
         """Получить список всех администраторов"""
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM users WHERE role = 'admin' AND is_active = 1")
         result = cursor.fetchall()
@@ -185,7 +191,7 @@ class Database:
 
     def remove_admin_rights(self, user_id):
         """Убрать права администратора"""
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("UPDATE users SET role = 'student' WHERE user_id = ?", (user_id,))
         conn.commit()
@@ -193,7 +199,7 @@ class Database:
 
     def get_lesson_by_id(self, lesson_id):
         """Отримати урок за ID"""
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''SELECT l.*, 
                                  t.first_name as teacher_first, t.last_name as teacher_last,
@@ -210,7 +216,7 @@ class Database:
 
     def get_active_lessons_for_student(self, student_id):
         """Отримати активні уроки студента"""
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''SELECT l.*, u.first_name, u.last_name, g.name as group_name FROM lessons l
                          LEFT JOIN users u ON l.teacher_id = u.user_id
@@ -225,7 +231,7 @@ class Database:
 
     def get_active_lessons_for_teacher(self, teacher_id):
         """Отримати активні уроки викладача"""
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''SELECT l.*, u.first_name, u.last_name, g.name as group_name FROM lessons l
                          LEFT JOIN users u ON l.student_id = u.user_id
@@ -238,7 +244,7 @@ class Database:
 
     def get_active_lessons_for_group(self, group_id):
         """Отримати активні уроки групи"""
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''SELECT l.*, u.first_name, u.last_name FROM lessons l
                          JOIN users u ON l.teacher_id = u.user_id
@@ -249,7 +255,7 @@ class Database:
         return result
 
     def add_user(self, user_id, username, first_name, last_name, role='student'):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''INSERT OR REPLACE INTO users 
                          (user_id, username, first_name, last_name, role) 
@@ -259,7 +265,7 @@ class Database:
         conn.close()
 
     def update_user_info(self, user_id, phone=None, language=None, birthdate=None):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
 
         updates = []
@@ -284,7 +290,7 @@ class Database:
         conn.close()
 
     def get_user(self, user_id):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
         result = cursor.fetchone()
@@ -292,7 +298,7 @@ class Database:
         return result
 
     def get_users_by_role(self, role):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM users WHERE role = ? AND is_active = 1", (role,))
         result = cursor.fetchall()
@@ -300,7 +306,7 @@ class Database:
         return result
 
     def assign_teacher_to_student(self, teacher_id, student_id):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         # Deactivate old assignments
         cursor.execute("UPDATE assignments SET is_active = 0 WHERE student_id = ?", (student_id,))
@@ -311,7 +317,7 @@ class Database:
         conn.close()
 
     # def get_teacher_students(self, teacher_id):
-    # conn = sqlite3.connect(self.db_name)
+    # conn = self._connect()
     # cursor = conn.cursor()
     # cursor.execute('''SELECT u.* FROM users u
     # JOIN assignments a ON u.user_id = a.student_id
@@ -321,7 +327,7 @@ class Database:
     # return result
 
     def get_student_teacher(self, student_id):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''SELECT u.* FROM users u 
                          JOIN assignments a ON u.user_id = a.teacher_id 
@@ -334,7 +340,7 @@ class Database:
         return self.db_name
 
     def get_active_teacher_ids_for_students(self, teacher_id):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''SELECT student_id FROM assignments
                           WHERE teacher_id = ? AND is_active = 1''', (teacher_id,))
@@ -343,7 +349,7 @@ class Database:
         return result
 
     def create_group(self, name, teacher_id, group_type='pair'):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''INSERT INTO groups (name, teacher_id, group_type) 
                          VALUES (?, ?, ?)''', (name, teacher_id, group_type))
@@ -353,7 +359,7 @@ class Database:
         return group_id
 
     def add_student_to_group(self, group_id, student_id):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''INSERT INTO group_members (group_id, student_id) 
                          VALUES (?, ?)''', (group_id, student_id))
@@ -361,7 +367,7 @@ class Database:
         conn.close()
 
     def get_teacher_groups(self, teacher_id):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM groups WHERE teacher_id = ? AND is_active = 1", (teacher_id,))
         result = cursor.fetchall()
@@ -369,7 +375,7 @@ class Database:
         return result
 
     def get_group_members(self, group_id):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''SELECT u.* FROM users u 
                          JOIN group_members gm ON u.user_id = gm.student_id 
@@ -379,7 +385,7 @@ class Database:
         return result
 
     def get_student_groups(self, student_id):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''SELECT g.* FROM groups g 
                          JOIN group_members gm ON g.id = gm.group_id 
@@ -389,7 +395,7 @@ class Database:
         return result
 
     def get_all_groups(self):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM groups WHERE is_active = 1")
         result = cursor.fetchall()
@@ -397,7 +403,7 @@ class Database:
         return result
 
     def get_group(self, group_id):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM groups WHERE id = ?", (group_id,))
         result = cursor.fetchone()
@@ -405,7 +411,7 @@ class Database:
         return result
 
     def remove_student_from_group(self, group_id, student_id):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("UPDATE group_members SET is_active = 0 WHERE group_id = ? AND student_id = ?",
                        (group_id, student_id))
@@ -413,14 +419,14 @@ class Database:
         conn.close()
 
     def change_group_teacher(self, group_id, new_teacher_id):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("UPDATE groups SET teacher_id = ? WHERE id = ?", (new_teacher_id, group_id))
         conn.commit()
         conn.close()
 
     def add_lesson(self, teacher_id, student_id=None, group_id=None, lesson_date=None, lesson_time=None, duration=60):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
 
         # Convert date and time objects to strings for SQLite
@@ -437,7 +443,7 @@ class Database:
         return lesson_id
 
     def get_student_lessons(self, student_id, date=None):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
 
         if date:
@@ -468,7 +474,7 @@ class Database:
         return result
 
     def get_teacher_lessons(self, teacher_id, date=None):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         if date:
             date_str = date.strftime('%Y-%m-%d') if hasattr(date, 'strftime') else str(date)
@@ -490,7 +496,7 @@ class Database:
     def save_message(self, from_user_id, to_user_id=None, group_id=None, message_text="", message_type='text',
                      file_id=None, reply_to_message_id=None, original_filename=None, mime_type=None):
         """Зберігає повідомлення і повертає його id у таблиці messages."""
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("SELECT role FROM users WHERE user_id = ?", (from_user_id,))
         sender_role = (cursor.fetchone() or [""])[0]
@@ -531,7 +537,7 @@ class Database:
         """Фіксує доставлену копію повідомлення у конкретному чаті."""
         if not message_db_id or not tg_message_id:
             return
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''INSERT INTO delivered_messages (message_db_id, chat_id, tg_message_id)
                           VALUES (?, ?, ?)''', (message_db_id, chat_id, tg_message_id))
@@ -543,7 +549,7 @@ class Database:
         За (chat_id, tg_message_id) знаходить запис messages.
         Повертає (message_db_id, from_user_id) або None.
         """
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''SELECT d.message_db_id, m.from_user_id
                           FROM delivered_messages d
@@ -556,7 +562,7 @@ class Database:
 
     def get_deliveries(self, message_db_id):
         """Всі доставлені копії повідомлення: список (chat_id, tg_message_id)."""
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''SELECT chat_id, tg_message_id FROM delivered_messages
                           WHERE message_db_id = ?''', (message_db_id,))
@@ -566,7 +572,7 @@ class Database:
 
     def get_delivery_tg_message_id(self, message_db_id, chat_id):
         """Повертає Telegram message_id для конкретної копії повідомлення в chat_id."""
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''SELECT tg_message_id FROM delivered_messages
                           WHERE message_db_id = ? AND chat_id = ?''',
@@ -577,7 +583,7 @@ class Database:
 
     def mark_message_deleted(self, message_db_id, deleted_by=None):
         """Позначає повідомлення видаленим (текст лишається в БД для адміна)."""
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''UPDATE messages
                           SET is_deleted = 1, deleted_by = ?, deleted_at = CURRENT_TIMESTAMP
@@ -587,7 +593,7 @@ class Database:
 
     def edit_message_text(self, message_db_id, new_text, edited_by):
         """Редагує текст і зберігає історію змін."""
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("SELECT message_text FROM messages WHERE id = ?", (message_db_id,))
         row = cursor.fetchone()
@@ -609,7 +615,7 @@ class Database:
         return True
 
     def get_message_edits(self, message_db_id):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''SELECT id, message_id, previous_text, new_text, edited_by, edited_at
                           FROM message_edits
@@ -621,7 +627,7 @@ class Database:
 
     def get_message_by_id(self, message_db_id):
         """Повертає один рядок messages зі стабільним набором колонок для Mini App."""
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''SELECT m.id, m.from_user_id, m.to_user_id, m.group_id,
                                 m.message_text, m.message_type, m.timestamp,
@@ -649,7 +655,7 @@ class Database:
 
     def teacher_can_access_student(self, teacher_id, student_id):
         """Перевіряє, що student належить teacher. Адмін має повний доступ."""
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("SELECT role FROM users WHERE user_id = ? AND is_active = 1", (teacher_id,))
         role = cursor.fetchone()
@@ -690,7 +696,7 @@ class Database:
         return bool(assigned)
 
     def get_miniapp_student_ids_for_teacher(self, teacher_id):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''WITH teacher_students AS (
                               SELECT student_id
@@ -726,7 +732,7 @@ class Database:
 
     def get_miniapp_dialogs(self, teacher_id):
         """Список direct діалогів викладача для Mini App."""
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("SELECT role FROM users WHERE user_id = ?", (teacher_id,))
         role_row = cursor.fetchone()
@@ -899,7 +905,7 @@ class Database:
 
     def get_miniapp_history(self, teacher_id, student_id=None, limit=200, include_deleted=True):
         """Історія direct повідомлень для Mini App, у хронологічному порядку."""
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("SELECT role FROM users WHERE user_id = ?", (teacher_id,))
         role_row = cursor.fetchone()
@@ -950,7 +956,7 @@ class Database:
         return result
 
     def get_miniapp_lessons(self, viewer_id):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("SELECT role FROM users WHERE user_id = ? AND is_active = 1", (viewer_id,))
         role_row = cursor.fetchone()
@@ -1020,7 +1026,7 @@ class Database:
         return result
 
     def set_student_status(self, student_id, status):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("UPDATE users SET student_status = ? WHERE user_id = ? AND role = 'student'",
                        (status, student_id))
@@ -1028,7 +1034,7 @@ class Database:
         conn.close()
 
     def replace_student_teacher(self, student_id, teacher_id):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("SELECT user_id FROM users WHERE user_id = ? AND role = 'teacher' AND is_active = 1",
                        (teacher_id,))
@@ -1044,7 +1050,7 @@ class Database:
         return True
 
     def remove_student_teacher(self, student_id):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("UPDATE assignments SET is_active = 0 WHERE student_id = ?", (student_id,))
         conn.commit()
@@ -1052,7 +1058,7 @@ class Database:
         return True
 
     def update_student_profile(self, student_id, level=None, learning_format=None, learning_goal=None, admin_note=None):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         updates = []
         params = []
@@ -1078,7 +1084,7 @@ class Database:
         admin_all_chats=True — адмін бачить ВСІ повідомлення де user є відправником
         АБО отримувачем (OR замість AND між user1/user2).
         """
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
 
         result = []
@@ -1134,7 +1140,7 @@ class Database:
         return result
 
     # def get_teacher_students(self, teacher_id):
-    # conn = sqlite3.connect(self.db_name)
+    # conn = self._connect()
     # cursor = conn.cursor()
     # cursor.execute('''SELECT u.user_id, u.username, u.first_name, u.last_name, u.role FROM users u
     # JOIN assignments a ON u.user_id = a.student_id
@@ -1144,7 +1150,7 @@ class Database:
     # return result
 
     def get_teacher_students(self, teacher_id):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''WITH teacher_students AS (
                               SELECT student_id
@@ -1177,7 +1183,7 @@ class Database:
         return result
 
     def get_teacher_groups(self, teacher_id):
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM groups WHERE teacher_id = ? AND is_active = 1", (teacher_id,))
         result = cursor.fetchall()
@@ -1186,7 +1192,7 @@ class Database:
 
     def get_unread_count_per_student(self, teacher_id):
         """Повертає список учнів з кількістю непрочитаних повідомлень для викладача."""
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''
             SELECT m.from_user_id, u.first_name, u.last_name, COUNT(*) as unread,
@@ -1204,7 +1210,7 @@ class Database:
 
     def mark_messages_read(self, from_user_id, to_user_id):
         """Позначає всі повідомлення від from_user_id до to_user_id як прочитані."""
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''
             UPDATE messages SET is_read = 1
@@ -1216,7 +1222,7 @@ class Database:
 
     def get_total_unread_count(self, teacher_id):
         """Повертає загальну кількість непрочитаних повідомлень для викладача."""
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute('''
             SELECT COUNT(*) FROM messages
@@ -1229,7 +1235,7 @@ class Database:
 
     def get_group_by_id(self, group_id):
         """Отримує групу за її ID."""
-        conn = sqlite3.connect(self.db_name)
+        conn = self._connect()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM groups WHERE id = ? AND is_active = 1", (group_id,))
         result = cursor.fetchone()

@@ -12,8 +12,13 @@ if str(PROJECT_ROOT) not in sys.path:
 load_dotenv(BASE_DIR / ".env")
 load_dotenv(BASE_DIR.parent / ".env")
 
-SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "change-me-for-local-dev")
 DEBUG = os.getenv("DJANGO_DEBUG", "0") == "1"
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "")
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = "local-development-only-change-me"
+    else:
+        raise RuntimeError("DJANGO_SECRET_KEY must be configured in production")
 ALLOWED_HOSTS = [host.strip() for host in os.getenv("DJANGO_ALLOWED_HOSTS", "*").split(",") if host.strip()]
 if DEBUG:
     ALLOWED_HOSTS += [".loca.lt", "127.0.0.1", "localhost"]
@@ -42,6 +47,7 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "miniapp_backend.ratelimit.ApiRateLimitMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -107,7 +113,12 @@ MINIAPP_DEV_TEACHER_ID = int(os.getenv("MINIAPP_DEV_TEACHER_ID", "0") or "0")
 MINIAPP_DEV_USER_ID = int(os.getenv("MINIAPP_DEV_USER_ID", str(MINIAPP_DEV_TEACHER_ID)) or "0")
 MINIAPP_INIT_DATA_MAX_AGE_SECONDS = int(os.getenv("MINIAPP_INIT_DATA_MAX_AGE_SECONDS", str(60 * 60 * 24)))
 MINIAPP_TOKEN_MAX_AGE_SECONDS = int(os.getenv("MINIAPP_TOKEN_MAX_AGE_SECONDS", str(60 * 60 * 12)))
-MINIAPP_MAX_UPLOAD_BYTES = int(os.getenv("MINIAPP_MAX_UPLOAD_BYTES", str(49 * 1024 * 1024)))
+MINIAPP_MAX_UPLOAD_BYTES = int(os.getenv("MINIAPP_MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
+MINIAPP_ALLOW_DEV_LOGIN = os.getenv("MINIAPP_ALLOW_DEV_LOGIN", "0") == "1"
+RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "1") == "1"
+TRUSTED_PROXY_IPS = {
+    value.strip() for value in os.getenv("TRUSTED_PROXY_IPS", "127.0.0.1").split(",") if value.strip()
+}
 
 CORS_ALLOWED_ORIGINS = [
     origin.strip() for origin in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if origin.strip()

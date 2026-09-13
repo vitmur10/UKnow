@@ -36,6 +36,7 @@ class TeacherChatConsumer(AsyncJsonWebsocketConsumer):
             await self.close(code=4401)
             return
 
+        self.ws_token = token or ""
         self.group_name = f"teacher_{self.teacher_tg_id}"
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
@@ -94,10 +95,10 @@ class TeacherChatConsumer(AsyncJsonWebsocketConsumer):
         if not await self.can_access(student_id):
             return
 
-        audio_value = content.get("audio_base64", "")
-        if "," in audio_value:
-            audio_value = audio_value.split(",", 1)[1]
-        audio_bytes = base64.b64decode(audio_value)
+        audio_bytes = self._decode_base64_limited(content.get("audio_base64", ""), strip_data_url=True)
+        if audio_bytes is None:
+            await self.send_json({"type": "error", "message": "Файл завеликий"})
+            return
 
         media_dir = Path(settings.MEDIA_ROOT) / "miniapp_voice"
         media_dir.mkdir(parents=True, exist_ok=True)
@@ -138,8 +139,8 @@ class TeacherChatConsumer(AsyncJsonWebsocketConsumer):
             header, raw_value = data_url.split(",", 1)
         else:
             header, raw_value = "", data_url
-        file_bytes = base64.b64decode(raw_value)
-        if len(file_bytes) > settings.MINIAPP_MAX_UPLOAD_BYTES:
+        file_bytes = self._decode_base64_limited(raw_value)
+        if file_bytes is None:
             await self.send_json({"type": "error", "message": "Файл завеликий"})
             return
         original_name = (content.get("filename") or "attachment").replace("\\", "_").replace("/", "_")
@@ -238,6 +239,20 @@ class TeacherChatConsumer(AsyncJsonWebsocketConsumer):
             return
         await sync_to_async(db.mark_messages_read)(from_user_id=student_id, to_user_id=self.teacher_tg_id)
         await self.broadcast({"type": "chat.read", "chat_id": student_id})
+
+    @staticmethod
+    def _decode_base64_limited(value, strip_data_url=False):
+        if not isinstance(value, str) or not value:
+            return None
+        if strip_data_url and "," in value:
+            value = value.split(",", 1)[1]
+        max_b64_len = (settings.MINIAPP_MAX_UPLOAD_BYTES // 3) * 4 + 8
+        if len(value) > max_b64_len:
+            return None
+        file_bytes = base64.b64decode(value)
+        if len(file_bytes) > settings.MINIAPP_MAX_UPLOAD_BYTES:
+            return None
+        return file_bytes
 
     @staticmethod
     def media_kind(mime_type, filename):

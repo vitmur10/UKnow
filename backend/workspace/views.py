@@ -1,6 +1,9 @@
 import mimetypes
+import time
 import uuid
 import logging
+import os
+import tempfile
 from pathlib import Path
 
 import httpx
@@ -26,7 +29,7 @@ logger = logging.getLogger(__name__)
 @require_POST
 def miniapp_auth(request):
     init_data = request.POST.get("initData", "")
-    if settings.DEBUG and not init_data and getattr(settings, "MINIAPP_DEV_USER_ID", None):
+    if getattr(settings, "MINIAPP_ALLOW_DEV_LOGIN", False) and not init_data and getattr(settings, "MINIAPP_DEV_USER_ID", None):
         dev_user_id = settings.MINIAPP_DEV_USER_ID
         user = db.get_user(dev_user_id)
         if user and user[4] in ("teacher", "admin") and bool(user[9]):
@@ -82,7 +85,6 @@ def miniapp_bootstrap(request):
         "messages": messages,
         "lessons": lessons,
         "teachers": teachers,
-        "db_path": db.get_db_path(),
     })
 
 
@@ -445,19 +447,52 @@ def _media_kind(mime_type, filename):
     return "document"
 
 
-@require_GET
-def message_voice(request, message_id):
-    row = db.get_message_by_id(message_id)
-    if not row or row[5] != "voice" or not row[8]:
-        raise Http404("Voice message not found")
+def _authorize_media_user(request):
+    token = request.GET.get("token", "")
+    try:
+        teacher_id = verify_ws_token(token)
+    except Exception:
+        return None
+    user = db.get_user(teacher_id)
+    if not user or user[4] not in ("teacher", "admin") or not bool(user[9]):
+        return None
+    return teacher_id, user
 
-    file_id = row[8]
-    cache_dir = Path(settings.MEDIA_ROOT) / "telegram_voice"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    cached = cache_dir / f"{message_id}.oga"
-    if cached.exists():
-        return FileResponse(open(cached, "rb"), content_type="audio/ogg")
 
+def _user_can_view_message(user_id, user, row):
+    if user[4] == "admin":
+        return True
+    from_id = int(row[1])
+    to_id = int(row[2])
+    if user_id in (from_id, to_id):
+        return True
+    student_id = to_id if from_id == user_id else from_id
+    return bool(db.teacher_can_access_student(user_id, student_id))
+
+
+def _prune_cache_dir(cache_dir, max_age_days=30):
+    marker = cache_dir / ".pruned"
+    try:
+        if marker.exists() and time.time() - marker.stat().st_mtime < 24 * 3600:
+            return
+    except OSError:
+        return
+    try:
+        now = time.time()
+        cutoff = now - max_age_days * 24 * 3600
+        for child in cache_dir.iterdir():
+            try:
+                if child.is_file() and child.name != ".pruned" and child.stat().st_mtime < cutoff:
+                    child.unlink(missing_ok=True)
+            except OSError:
+                pass
+        marker.write_text("")
+    except OSError:
+        pass
+
+
+def _download_telegram_file(file_id, cache_path, max_bytes):
+    """Download a Telegram file with a hard streaming size limit."""
     response = httpx.get(
         f"https://api.telegram.org/bot{settings.BOT_TOKEN}/getFile",
         params={"file_id": file_id},
@@ -465,19 +500,77 @@ def message_voice(request, message_id):
     )
     response.raise_for_status()
     file_path = response.json()["result"]["file_path"]
-    media = httpx.get(
-        f"https://api.telegram.org/file/bot{settings.BOT_TOKEN}/{file_path}",
-        timeout=30,
-    )
-    media.raise_for_status()
-    cached.write_bytes(media.content)
-    return FileResponse(open(cached, "rb"), content_type="audio/ogg")
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=".download-", dir=cache_path.parent)
+    total = 0
+    try:
+        with os.fdopen(fd, "wb") as target:
+            with httpx.stream(
+                "GET",
+                f"https://api.telegram.org/file/bot{settings.BOT_TOKEN}/{file_path}",
+                timeout=30,
+            ) as media:
+                media.raise_for_status()
+                for chunk in media.iter_bytes(64 * 1024):
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise ValueError("Telegram media exceeds configured size limit")
+                    target.write(chunk)
+        os.replace(temp_name, cache_path)
+    except Exception:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise
+
+
+@require_GET
+def message_voice(request, message_id):
+    authorized = _authorize_media_user(request)
+    if not authorized:
+        raise Http404("Voice message not found")
+    user_id, user = authorized
+
+    row = db.get_message_by_id(message_id)
+    if not row or row[5] != "voice" or not row[8]:
+        raise Http404("Voice message not found")
+    if not _user_can_view_message(user_id, user, row):
+        raise Http404("Voice message not found")
+
+    file_id = row[8]
+    cache_dir = Path(settings.MEDIA_ROOT) / "telegram_voice"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cached = cache_dir / f"{message_id}.oga"
+    if cached.exists():
+        response = FileResponse(open(cached, "rb"), content_type="audio/ogg")
+        response["Cache-Control"] = "private, max-age=300"
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
+
+    _prune_cache_dir(cache_dir)
+
+    try:
+        _download_telegram_file(file_id, cached, settings.MINIAPP_MAX_UPLOAD_BYTES)
+    except ValueError:
+        raise Http404("Voice message not found")
+    response = FileResponse(open(cached, "rb"), content_type="audio/ogg")
+    response["Cache-Control"] = "private, max-age=300"
+    response["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 @require_GET
 def message_media(request, message_id):
+    authorized = _authorize_media_user(request)
+    if not authorized:
+        raise Http404("Media not found")
+    user_id, user = authorized
+
     row = db.get_message_by_id(message_id)
     if not row or not row[8]:
+        raise Http404("Media not found")
+    if not _user_can_view_message(user_id, user, row):
         raise Http404("Media not found")
 
     message_type = row[5] or "document"
@@ -496,19 +589,18 @@ def message_media(request, message_id):
     cache_dir.mkdir(parents=True, exist_ok=True)
     cached = cache_dir / f"{message_id}-{message_type}"
     if cached.exists():
-        return FileResponse(open(cached, "rb"), content_type=mime_type)
+        response = FileResponse(open(cached, "rb"), content_type=mime_type)
+        response["Cache-Control"] = "private, max-age=300"
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
 
-    response = httpx.get(
-        f"https://api.telegram.org/bot{settings.BOT_TOKEN}/getFile",
-        params={"file_id": file_id},
-        timeout=30,
-    )
-    response.raise_for_status()
-    file_path = response.json()["result"]["file_path"]
-    media = httpx.get(
-        f"https://api.telegram.org/file/bot{settings.BOT_TOKEN}/{file_path}",
-        timeout=30,
-    )
-    media.raise_for_status()
-    cached.write_bytes(media.content)
-    return FileResponse(open(cached, "rb"), content_type=mime_type)
+    _prune_cache_dir(cache_dir)
+
+    try:
+        _download_telegram_file(file_id, cached, settings.MINIAPP_MAX_UPLOAD_BYTES)
+    except ValueError:
+        raise Http404("Media not found")
+    response = FileResponse(open(cached, "rb"), content_type=mime_type)
+    response["Cache-Control"] = "private, max-age=300"
+    response["X-Content-Type-Options"] = "nosniff"
+    return response

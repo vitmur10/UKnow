@@ -23,7 +23,12 @@ def miniapp_index(request):
     index_path = settings.FRONTEND_DIST_DIR / "index.html"
     if not index_path.exists():
         raise Http404("Run npm run build in miniapp first")
-    return FileResponse(open(index_path, "rb"))
+    response = FileResponse(open(index_path, "rb"))
+    # index.html changes on every frontend build; do not let a proxy keep it
+    # indefinitely. Hashed JS/CSS assets can be cached separately by Apache/CDN.
+    response["Cache-Control"] = "no-cache, must-revalidate"
+    response["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 urlpatterns = [

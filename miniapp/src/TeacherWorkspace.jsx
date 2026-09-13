@@ -111,7 +111,9 @@ export default function TeacherWorkspace() {
       setChats(bootstrap.chats || []);
       setLessons(bootstrap.lessons || []);
       setTeachers(bootstrap.teachers || []);
-      setMessages((current) => current.length ? mergeMessages(current, bootstrap.messages || []) : (bootstrap.messages || []));
+      const bootMessages = bootstrap.messages || [];
+      bootMessages.forEach((m) => withMediaToken(token, m));
+      setMessages((current) => current.length ? mergeMessages(current, bootMessages) : bootMessages);
       if (bootstrap.role === "admin") setActiveSection(getStoredAdminSection());
       const initialChatId = chatIdFromStartParam(startParam);
       if (initialChatId && !selectedChatIdRef.current) setSelectedChatId(initialChatId);
@@ -199,6 +201,10 @@ export default function TeacherWorkspace() {
 
   useEffect(() => {
     if (!wsToken) return undefined;
+    // WebSocket is the live transport. Only poll as a slow recovery fallback
+    // while it is offline; polling the full bootstrap every 15 seconds creates
+    // unnecessary traffic and repeatedly serializes the whole chat history.
+    if (status === "online") return undefined;
     let cancelled = false;
     let reconnectTimer = null;
     let reconnectAttempt = 0;
@@ -270,20 +276,22 @@ export default function TeacherWorkspace() {
         setChats(payload.chats || []);
         setLessons(payload.lessons || []);
         setTeachers(payload.teachers || []);
-        setMessages((current) => mergeMessages(current, payload.messages || []));
+        const pollMessages = payload.messages || [];
+        pollMessages.forEach((m) => withMediaToken(wsToken, m));
+        setMessages((current) => mergeMessages(current, pollMessages));
         setAuthError("");
       } catch {
         // WebSocket remains the primary channel; polling is only a quiet fallback.
       }
     }
 
-    const intervalId = window.setInterval(refreshBootstrap, 15000);
+    const intervalId = window.setInterval(refreshBootstrap, 120000);
 
     return () => {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [authenticateAndBootstrap, wsToken]);
+  }, [authenticateAndBootstrap, status, wsToken]);
 
   useEffect(() => {
     if (!selectedChatId || status !== "online") return;
@@ -293,6 +301,10 @@ export default function TeacherWorkspace() {
   }, [selectedChatId, status, wsToken]);
 
   function handleWsMessage(data) {
+    if (wsToken) {
+      if (Array.isArray(data.messages)) data.messages.forEach((m) => withMediaToken(wsToken, m));
+      if (data.message && typeof data.message === "object") withMediaToken(wsToken, data.message);
+    }
     if (data.type === "chat.history") {
       setChats(data.chats || []);
       setMessages((current) => mergeMessages(current, data.messages || []));
@@ -584,6 +596,7 @@ export default function TeacherWorkspace() {
     if (!response.ok) return;
     const payload = await response.json();
     const history = payload.messages || [];
+    history.forEach((m) => withMediaToken(wsToken, m));
     setMessages((current) => mergeMessages(current, history));
   }
 
@@ -2021,6 +2034,18 @@ function mergeMessages(current, incoming) {
   const byId = new Map(current.map((message) => [String(message.id), message]));
   incoming.forEach((message) => byId.set(String(message.id), message));
   return [...byId.values()].sort(compareMessages);
+}
+
+function withMediaToken(token, message) {
+  if (!token || !message) return;
+  if (message.media_url && !message.media_url.includes("token=")) {
+    const sep = message.media_url.includes("?") ? "&" : "?";
+    message.media_url = `${message.media_url}${sep}token=${encodeURIComponent(token)}`;
+  }
+  if (message.voice_url && !message.voice_url.includes("token=")) {
+    const sep = message.voice_url.includes("?") ? "&" : "?";
+    message.voice_url = `${message.voice_url}${sep}token=${encodeURIComponent(token)}`;
+  }
 }
 
 function markMessageDeletedLocally(messages, messageId) {
