@@ -431,13 +431,15 @@ async def broadcast_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user_role = db.get_user(user_id)[4]
 
     query = update.callback_query
-    await query.answer("Розсилку скасовано.")
+    cancel_text = "❌ **Масову розсилку скасовано.** Ви повернулися до головного меню."
 
-    # Редагуємо повідомлення, щоб прибрати кнопку "Скасувати"
-    await query.edit_message_text(
-        "❌ **Масову розсилку скасовано.** Ви повернулися до головного меню.",
-        parse_mode=ParseMode.MARKDOWN
-    )
+    if query is not None:
+        await query.answer("Розсилку скасовано.")
+        # Для inline-кнопки редагуємо повідомлення, щоб прибрати кнопку "Скасувати".
+        await query.edit_message_text(cancel_text, parse_mode=ParseMode.MARKDOWN)
+    elif update.effective_message is not None:
+        # Команди /cancel, /start і кнопки меню не мають callback_query.
+        await update.effective_message.reply_text(cancel_text, parse_mode=ParseMode.MARKDOWN)
 
     # Надсилаємо головну клавіатуру
     await context.bot.send_message(
