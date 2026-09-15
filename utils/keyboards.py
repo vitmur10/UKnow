@@ -8,12 +8,14 @@ def get_main_keyboard(role):
             [KeyboardButton("💬 Написати викладачеві/групі"), KeyboardButton("🗓 Мій календар")],
             [KeyboardButton("🏫 Про школу"), KeyboardButton("📋 Правила школи")],
             [KeyboardButton("❓ Популярні питання"), KeyboardButton("📞 Написати менеджеру")],
-            [KeyboardButton("📖 Історія переписок")]
+            [KeyboardButton("📖 Історія переписок")],
+            [KeyboardButton("⚠️ Повідомити про проблему")]
         ]
     elif role == 'teacher':
         keyboard = [
             [KeyboardButton("💬 Написати групі"), KeyboardButton("📚 Мої групи")],
-            [KeyboardButton("➕ Додати урок"), KeyboardButton("📞 Написати менеджеру")]
+            [KeyboardButton("➕ Додати урок"), KeyboardButton("📞 Написати менеджеру")],
+            [KeyboardButton("⚠️ Повідомити про проблему")]
         ]
     else:  # admin
         keyboard = [
@@ -21,7 +23,8 @@ def get_main_keyboard(role):
             [KeyboardButton("👥 Керування групами")],
             [KeyboardButton("🗓 Керування розкладом")],
             [KeyboardButton("🗂️ Переписки / Чати")],
-            [KeyboardButton("📢 Масова розсилка")]
+            [KeyboardButton("📢 Масова розсилка")],
+            [KeyboardButton("⚠️ Повідомити про проблему")]
         ]
 
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

@@ -195,6 +195,7 @@ async def menu_button_router(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     # Словник-маршрутизатор: Кнопка -> (Модуль, Функція)
     routes = {
+        '⚠️ Повідомити про проблему': ('handlers.problem_report', 'problem_report_start'),
         '💬 Написати викладачеві/групі': ('handlers.chat_engine', 'student_message_start'),
         '💬 Написати групі': ('handlers.chat_engine', 'teacher_message_groups'),
         '🏫 Про школу': ('handlers.student', 'menu_about_school'),

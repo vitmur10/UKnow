@@ -36,6 +36,7 @@ from handlers.common import (
     common_callbacks, route_manager_contact, fallback_message, handle_unknown_text,
     myid_command, manager_command, miniapp_command, handle_history_button, show_media_gallery
 )
+from handlers.problem_report import problem_report_message, problem_report_cancel, chat_id_command
 
 # Учень
 from handlers.student import (
@@ -110,6 +111,9 @@ async def global_message_handler(update: Update, context: ContextTypes.DEFAULT_T
     if MAIN_MENU_BUTTONS_FILTER.check_update(update):
         return
 
+    if await problem_report_message(update, context):
+        return
+
     # Тригерні слова — журналюємо завжди (навіть у активному чаті)
     for trigger in TRIGGER_WORDS:
         if trigger.lower() in message_text.lower():
@@ -118,6 +122,9 @@ async def global_message_handler(update: Update, context: ContextTypes.DEFAULT_T
     # АКТИВНИЙ ЧАТ: миттєве пересилання
     if get_active_chat(context):
         await relay_chat_message(update, context)
+        return
+
+    if await problem_report_message(update, context):
         return
 
     # Пошук користувача за ім'ям (історія переписок)
@@ -320,6 +327,8 @@ def main():
     application.add_handler(CommandHandler('remove_admin', remove_admin_command))
     application.add_handler(CommandHandler('admin_list', admin_list_command))
     application.add_handler(CommandHandler('myid', myid_command))
+    application.add_handler(CommandHandler('chatid', chat_id_command))
+    application.add_handler(CommandHandler('cancel', problem_report_cancel))
     application.add_handler(CommandHandler("backup", backup_command))
 
     # ==========================================
