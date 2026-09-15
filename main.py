@@ -176,6 +176,11 @@ async def global_media_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     await handle_unknown_text(update, context)
 
 
+async def ignore_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Не обробляємо команди та інші повідомлення бота у групових чатах."""
+    return
+
+
 async def route_student_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_student_chat_history(update, context, update.effective_user.id)
 
@@ -200,6 +205,10 @@ def main():
     # 2. Базові налаштування
     init_super_admin()
     schedule_daily_reminders(application)
+
+    # Має бути зареєстрований до команд і ConversationHandler:
+    # у групах бот повністю мовчить, включно з /start та іншими командами.
+    application.add_handler(MessageHandler(filters.ChatType.GROUPS, ignore_group_message), group=0)
 
     # ==========================================
     # 3. CONVERSATION HANDLERS (ДІАЛОГИ)
