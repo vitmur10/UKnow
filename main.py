@@ -97,6 +97,11 @@ async def global_message_handler(update: Update, context: ContextTypes.DEFAULT_T
     4. Адмін-стани (handle_admin_text_states).
     5. Невідомий текст.
     """
+    # Бот обробляє звичайні повідомлення лише в особистих чатах.
+    # У групах не відповідаємо на сторонні повідомлення.
+    if not update.effective_chat or update.effective_chat.type != "private":
+        return
+
     user_id = update.effective_user.id
     user = db.get_user(user_id)
 
@@ -150,6 +155,10 @@ async def global_media_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     Якщо у користувача активний чат — файл миттєво пересилається співрозмовнику
     (кожен файл альбому окремо, без буферизації — нічого не губиться).
     """
+    # Не реагуємо на медіа в групах, щоб бот не вів там звичайний діалог.
+    if not update.effective_chat or update.effective_chat.type != "private":
+        return
+
     user_id = update.effective_user.id
     user = db.get_user(user_id)
     if not user:
@@ -157,6 +166,10 @@ async def global_media_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if get_active_chat(context):
         await relay_chat_message(update, context)
+        return
+
+    # Якщо користувач натиснув «Повідомити про проблему», приймаємо фото/відео/файли.
+    if await problem_report_message(update, context):
         return
 
     # Медіа поза чатом — підказуємо користувачу, що робити
