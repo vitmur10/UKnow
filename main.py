@@ -129,9 +129,6 @@ async def global_message_handler(update: Update, context: ContextTypes.DEFAULT_T
         await relay_chat_message(update, context)
         return
 
-    if await problem_report_message(update, context):
-        return
-
     # Пошук користувача за ім'ям (історія переписок)
     if context.user_data.get('waiting_for_search_name'):
         await fallback_message(update, context)

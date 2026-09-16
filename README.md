@@ -21,6 +21,7 @@
   - для діагностики є команда:
     - `python backend/manage.py miniapp_debug_user <TELEGRAM_ID>`
   - якщо `backend/.env` містить інший `BOT_TOKEN`, Mini App auth через Telegram `initData` буде падати з `401`
+  - `file_id` прив'язаний до конкретного бота. Після зміни бота додайте старий токен як `TELEGRAM_MEDIA_LEGACY_BOT_TOKEN` у `.env`, щоб Mini App міг дочитати старі медіафайли; `BOT_TOKEN` лишається токеном нового бота
   - якщо немає `redis-server`, початковий bootstrap все одно має працювати, але live WebSocket updates можуть не працювати стабільно
 
 Нижче наведено детальний опис структури директорій та файлів:

@@ -106,6 +106,9 @@ CHANNEL_LAYERS = {
 }
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+# Telegram file_id values are scoped to a bot. Keep the former token only
+# while historical media from the previous bot still needs to be available.
+TELEGRAM_MEDIA_LEGACY_BOT_TOKEN = os.getenv("TELEGRAM_MEDIA_LEGACY_BOT_TOKEN", "")
 TEACHER_MINIAPP_IDS = {
     int(value) for value in os.getenv("TEACHER_MINIAPP_IDS", "").split(",") if value.strip()
 }

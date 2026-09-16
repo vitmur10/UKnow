@@ -11,6 +11,7 @@ from django.conf import settings
 from database.db_manager import db
 
 from .bot_api import (
+    TelegramDeliveryError,
     delete_telegram_message,
     edit_telegram_text,
     send_attachment_to_student,
@@ -74,6 +75,24 @@ class TeacherChatConsumer(AsyncJsonWebsocketConsumer):
         if not text or not await self.can_access(student_id):
             return
 
+        reply_to_message_id = content.get("reply_to_message_id")
+        reply_to_tg_message_id = (
+            await sync_to_async(db.get_delivery_tg_message_id)(reply_to_message_id, student_id)
+            if reply_to_message_id else None
+        )
+        try:
+            sent_message_id = await send_text_to_student(student_id, text, reply_to_tg_message_id)
+        except TelegramDeliveryError as exc:
+            message = (
+                "Учень ще не активував нового бота. Попросіть його відкрити бота й натиснути /start."
+                if exc.requires_start else "Не вдалося надіслати повідомлення у Telegram. Спробуйте ще раз."
+            )
+            await self.send_json({"type": "error", "message": message})
+            return
+        except Exception:
+            await self.send_json({"type": "error", "message": "Не вдалося надіслати повідомлення у Telegram. Спробуйте ще раз."})
+            return
+
         message_id = await sync_to_async(db.save_message)(
             from_user_id=self.teacher_tg_id,
             to_user_id=student_id,
@@ -81,9 +100,8 @@ class TeacherChatConsumer(AsyncJsonWebsocketConsumer):
             message_text=text,
             message_type="text",
             file_id=None,
-            reply_to_message_id=content.get("reply_to_message_id"),
+            reply_to_message_id=reply_to_message_id,
         )
-        sent_message_id = await send_text_to_student(student_id, text)
         if sent_message_id:
             await sync_to_async(db.save_delivery)(message_id, student_id, sent_message_id)
 

@@ -16,7 +16,12 @@ from django.views.decorators.http import require_GET, require_POST
 from channels.layers import get_channel_layer
 
 from database.db_manager import db
-from .bot_api import delete_telegram_message, send_attachment_to_student, send_text_to_student
+from .bot_api import (
+    TelegramDeliveryError,
+    delete_telegram_message,
+    send_attachment_to_student,
+    send_text_to_student,
+)
 from .telegram_auth import TelegramAuthError, issue_ws_token, validate_telegram_init_data
 from .telegram_auth import verify_ws_token
 from .sqlite_payloads import dialog_payload, message_payload
@@ -167,10 +172,21 @@ def miniapp_send_message(request):
     except ValueError:
         return JsonResponse({"error": "Invalid reply_to_message_id"}, status=400)
 
+    reply_to_tg_message_id = _resolve_reply_to_tg_message_id(reply_to_message_id, student_id)
     try:
-        sent_message_id = async_to_sync(send_text_to_student)(student_id, text)
-    except Exception:
-        return JsonResponse({"error": "Не вдалося надіслати повідомлення у Telegram"}, status=502)
+        sent_message_id = async_to_sync(send_text_to_student)(
+            student_id, text, reply_to_tg_message_id
+        )
+    except TelegramDeliveryError as exc:
+        if exc.requires_start:
+            return JsonResponse({
+                "error": "Учень ще не активував нового бота. Попросіть його відкрити бота й натиснути /start, тоді надішліть повідомлення повторно."
+            }, status=409)
+        logger.warning("Telegram text delivery failed for student %s: %s", student_id, exc)
+        return JsonResponse({"error": "Не вдалося надіслати повідомлення у Telegram. Спробуйте ще раз."}, status=502)
+    except Exception as exc:
+        logger.exception("Unexpected Telegram text delivery error for student %s: %s", student_id, exc)
+        return JsonResponse({"error": "Не вдалося надіслати повідомлення у Telegram. Спробуйте ще раз."}, status=502)
 
     message_id = db.save_message(
         from_user_id=user_id,
@@ -493,36 +509,64 @@ def _prune_cache_dir(cache_dir, max_age_days=30):
 
 def _download_telegram_file(file_id, cache_path, max_bytes):
     """Download a Telegram file with a hard streaming size limit."""
-    response = httpx.get(
-        f"https://api.telegram.org/bot{settings.BOT_TOKEN}/getFile",
-        params={"file_id": file_id},
-        timeout=30,
-    )
-    response.raise_for_status()
-    file_path = response.json()["result"]["file_path"]
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temp_name = tempfile.mkstemp(prefix=".download-", dir=cache_path.parent)
-    total = 0
-    try:
-        with os.fdopen(fd, "wb") as target:
-            with httpx.stream(
-                "GET",
-                f"https://api.telegram.org/file/bot{settings.BOT_TOKEN}/{file_path}",
-                timeout=30,
-            ) as media:
-                media.raise_for_status()
-                for chunk in media.iter_bytes(64 * 1024):
-                    total += len(chunk)
-                    if total > max_bytes:
-                        raise ValueError("Telegram media exceeds configured size limit")
-                    target.write(chunk)
-        os.replace(temp_name, cache_path)
-    except Exception:
+    tokens = [settings.BOT_TOKEN]
+    legacy_token = getattr(settings, "TELEGRAM_MEDIA_LEGACY_BOT_TOKEN", "")
+    if legacy_token and legacy_token not in tokens:
+        tokens.append(legacy_token)
+
+    last_error = None
+    for bot_token in filter(None, tokens):
         try:
-            os.unlink(temp_name)
-        except OSError:
-            pass
-        raise
+            response = httpx.get(
+                f"https://api.telegram.org/bot{bot_token}/getFile",
+                params={"file_id": file_id},
+                timeout=30,
+            )
+            response.raise_for_status()
+            file_path = response.json()["result"]["file_path"]
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_name = None
+            fd, temp_name = tempfile.mkstemp(prefix=".download-", dir=cache_path.parent)
+            total = 0
+            try:
+                with os.fdopen(fd, "wb") as target:
+                    with httpx.stream(
+                        "GET",
+                        f"https://api.telegram.org/file/bot{bot_token}/{file_path}",
+                        timeout=30,
+                    ) as media:
+                        media.raise_for_status()
+                        for chunk in media.iter_bytes(64 * 1024):
+                            total += len(chunk)
+                            if total > max_bytes:
+                                raise ValueError("Telegram media exceeds configured size limit")
+                            target.write(chunk)
+                os.replace(temp_name, cache_path)
+                return
+            except Exception:
+                try:
+                    if temp_name:
+                        os.unlink(temp_name)
+                except OSError:
+                    pass
+                raise
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            last_error = exc
+    raise last_error or ValueError("Telegram media is unavailable")
+
+
+def _media_content_type(message_type, stored_mime_type):
+    if stored_mime_type and stored_mime_type != "application/octet-stream":
+        return stored_mime_type
+    return {
+        "photo": "image/jpeg",
+        "video": "video/mp4",
+        "audio": "audio/mpeg",
+        "voice": "audio/ogg",
+        "animation": "video/mp4",
+        "video_note": "video/mp4",
+        "sticker": "image/webp",
+    }.get(message_type, stored_mime_type or "application/octet-stream")
 
 
 @require_GET
@@ -575,7 +619,7 @@ def message_media(request, message_id):
 
     message_type = row[5] or "document"
     file_id = row[8]
-    mime_type = row[19] or "application/octet-stream"
+    mime_type = _media_content_type(message_type, row[19])
 
     if file_id.startswith("miniapp-"):
         local_path = Path(settings.MEDIA_ROOT) / "miniapp_uploads" / file_id
@@ -598,7 +642,7 @@ def message_media(request, message_id):
 
     try:
         _download_telegram_file(file_id, cached, settings.MINIAPP_MAX_UPLOAD_BYTES)
-    except ValueError:
+    except (httpx.HTTPError, KeyError, ValueError):
         raise Http404("Media not found")
     response = FileResponse(open(cached, "rb"), content_type=mime_type)
     response["Cache-Control"] = "private, max-age=300"
