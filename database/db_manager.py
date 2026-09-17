@@ -134,6 +134,16 @@ class Database:
         cursor.execute('''CREATE INDEX IF NOT EXISTS idx_delivered_lookup
                           ON delivered_messages (chat_id, tg_message_id)''')
 
+        # Зв'язок повідомлення у звітній гілці з автором проблеми.
+        cursor.execute('''CREATE TABLE IF NOT EXISTS problem_report_deliveries (
+            report_chat_id INTEGER NOT NULL,
+            report_thread_id INTEGER,
+            report_message_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            created DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (report_chat_id, report_message_id)
+        )''')
+
         cursor.execute('''CREATE TABLE IF NOT EXISTS lessons (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             teacher_id INTEGER,
@@ -568,6 +578,28 @@ class Database:
                           WHERE message_db_id = ?''', (message_db_id,))
         result = cursor.fetchall()
         conn.close()
+
+    def save_problem_report_delivery(self, chat_id, thread_id, message_id, user_id):
+        if not chat_id or not message_id or not user_id:
+            return
+        conn = self._connect()
+        conn.execute('''INSERT OR REPLACE INTO problem_report_deliveries
+                        (report_chat_id, report_thread_id, report_message_id, user_id)
+                        VALUES (?, ?, ?, ?)''',
+                     (chat_id, thread_id, message_id, user_id))
+        conn.commit()
+        conn.close()
+
+    def find_problem_report_user(self, chat_id, thread_id, message_id):
+        conn = self._connect()
+        cursor = conn.cursor()
+        cursor.execute('''SELECT user_id FROM problem_report_deliveries
+                          WHERE report_chat_id = ? AND report_message_id = ?
+                            AND (report_thread_id IS NULL OR report_thread_id = ?)''',
+                       (chat_id, message_id, thread_id))
+        result = cursor.fetchone()
+        conn.close()
+        return result[0] if result else None
         return result
 
     def get_delivery_tg_message_id(self, message_db_id, chat_id):

@@ -36,7 +36,9 @@ from handlers.common import (
     common_callbacks, route_manager_contact, fallback_message, handle_unknown_text,
     myid_command, manager_command, miniapp_command, handle_history_button, show_media_gallery
 )
-from handlers.problem_report import problem_report_message, problem_report_cancel, chat_id_command
+from handlers.problem_report import (
+    problem_report_message, problem_report_cancel, problem_report_reply, chat_id_command,
+)
 
 # Учень
 from handlers.student import (
@@ -205,6 +207,11 @@ def main():
 
     # Має бути зареєстрований до команд і ConversationHandler:
     # у групах бот повністю мовчить, включно з /start та іншими командами.
+    # Єдиний виняток — reply адміністратора на повідомлення зі звітної гілки.
+    application.add_handler(
+        MessageHandler(filters.ChatType.GROUPS & filters.REPLY, problem_report_reply),
+        group=-1,
+    )
     application.add_handler(MessageHandler(filters.ChatType.GROUPS, ignore_group_message), group=0)
 
     # ==========================================
