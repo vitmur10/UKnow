@@ -1945,9 +1945,12 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_full_user_list(update, context, role='student')
             return
 
-        # 2. Додавання викладача (ID)
+        # 2. Додавання викладача (ID або username)
         elif data == "add_teacher":
-            await query.edit_message_text("Введіть ID користувача, якого хочете зробити викладачем:")
+            await query.edit_message_text(
+                "Введіть ID або @username користувача, якого хочете зробити викладачем:\n"
+                "Наприклад: 123456789 або @anastasiasuntseva"
+            )
             context.user_data['waiting_for_teacher_id'] = True
             return
 
@@ -2183,36 +2186,47 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_admin_text_states(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_text = update.message.text
     user = db.get_user(update.effective_user.id)
-    # Обробка додавання викладача за ID
+    # Обробка додавання викладача за ID або username
     if context.user_data.get('waiting_for_teacher_id') and user[4] == 'admin':
-        try:
-            teacher_id = int(message_text)
+        value = message_text.strip().lstrip('@')
+        target_user = None
+        teacher_id = None
+        if value.isdigit():
+            teacher_id = int(value)
             target_user = db.get_user(teacher_id)
-
+        elif value:
+            conn = sqlite3.connect(db.db_name, timeout=30, check_same_thread=False)
+            target_user = conn.execute(
+                "SELECT * FROM users WHERE lower(username) = lower(?) LIMIT 1", (value,)
+            ).fetchone()
+            conn.close()
             if target_user:
-                conn = sqlite3.connect(db.db_name, timeout=30, check_same_thread=False)
-                cursor = conn.cursor()
-                cursor.execute("UPDATE users SET role = 'teacher' WHERE user_id = ?", (teacher_id,))
-                conn.commit()
-                conn.close()
+                teacher_id = target_user[0]
 
-                await update.message.reply_text(
-                    f"✅ Користувач {target_user[2]} {target_user[3]} тепер викладач!"
+        if target_user:
+            conn = sqlite3.connect(db.db_name, timeout=30, check_same_thread=False)
+            cursor = conn.cursor()
+            cursor.execute("UPDATE users SET role = 'teacher' WHERE user_id = ?", (teacher_id,))
+            conn.commit()
+            conn.close()
+
+            await update.message.reply_text(
+                f"✅ Користувач {target_user[2]} {target_user[3]} (@{target_user[1] or 'без username'}) тепер викладач!"
+            )
+
+            # Повідомити нового викладача
+            try:
+                await context.bot.send_message(
+                    teacher_id,
+                    "🎉 Вітаємо! Ви стали викладачем!",
+                    reply_markup=get_main_keyboard('teacher')
                 )
-
-                # Повідомити нового викладача
-                try:
-                    await context.bot.send_message(
-                        teacher_id,
-                        "🎉 Вітаємо! Ви стали викладачем!",
-                        reply_markup=get_main_keyboard('teacher')
-                    )
-                except:
-                    pass
-            else:
-                await update.message.reply_text("❌ Користувач з таким ID не знайдений.")
-        except ValueError:
-            await update.message.reply_text("❌ Неправильний ID. Введіть число.")
+            except Exception:
+                pass
+        else:
+            await update.message.reply_text(
+                "❌ Користувача не знайдено. Перевірте ID або username та спробуйте ще раз."
+            )
 
         context.user_data['waiting_for_teacher_id'] = False
         return True
