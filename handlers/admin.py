@@ -2196,11 +2196,28 @@ async def handle_admin_text_states(update: Update, context: ContextTypes.DEFAULT
             target_user = db.get_user(teacher_id)
         elif value:
             conn = sqlite3.connect(db.db_name, timeout=30, check_same_thread=False)
-            target_user = conn.execute(
-                "SELECT * FROM users WHERE lower(username) = lower(?) LIMIT 1", (value,)
-            ).fetchone()
+            search = value.lower()
+            matches = conn.execute(
+                """SELECT * FROM users
+                   WHERE lower(coalesce(username,'')) = ?
+                      OR lower(coalesce(first_name,'')) = ?
+                      OR lower(coalesce(last_name,'')) = ?
+                      OR lower(trim(coalesce(first_name,'') || ' ' || coalesce(last_name,''))) = ?
+                   ORDER BY user_id""",
+                (search, search, search, search),
+            ).fetchall()
             conn.close()
-            if target_user:
+            if len(matches) > 1:
+                names = "\n".join(
+                    f"• {row[2] or ''} {row[3] or ''} (@{row[1] or 'без username'}, ID {row[0]})"
+                    for row in matches
+                )
+                await update.message.reply_text(
+                    "❌ Знайдено кілька користувачів. Введіть точний @username або ID:\n" + names
+                )
+                return True
+            if matches:
+                target_user = matches[0]
                 teacher_id = target_user[0]
 
         if target_user:
