@@ -57,7 +57,7 @@ async def register_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['last_name'] = ' '.join(name_parts[1:])
 
     await update.message.reply_text(
-        "Чудово! Тепер оберіть мову, яку ви вивчаєте:",
+        "Чудово! Оберіть усі мови, які ви вивчаєте, а потім натисніть «Готово»:",
         reply_markup=get_language_keyboard()
     )
     return REGISTER_LANG
@@ -73,24 +73,29 @@ async def register_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return REGISTER_LANG
 
-    await query.answer()
-
     try:
-        # Отримуємо індекс мови з callback_data (наприклад, "lang_2")
+        selected = set(context.user_data.get('language_indices', []))
+        if query.data == "lang_done":
+            if not selected:
+                await query.answer("Оберіть хоча б одну мову", show_alert=True)
+                return REGISTER_LANG
+            await query.answer()
+            language_names = [LANGUAGES[i].split(" ", 1)[1] for i in sorted(selected)]
+            context.user_data['language'] = ", ".join(language_names)
+            await query.edit_message_text(
+                f"Обрані мови: {context.user_data['language']} ✅\n\n"
+                "Тепер введіть вашу дату народження у форматі ДД.ММ.РРРР:"
+            )
+            return REGISTER_BIRTHDATE
+
         lang_index = int(query.data.split("_")[1])
-        full_lang_text = LANGUAGES[lang_index]
-
-        # Очищаємо назву мови від емодзі для бази даних
-        # Якщо формат "🇬🇧 English", беремо все після пробілу
-        language_name = full_lang_text.split(" ", 1)[1] if " " in full_lang_text else full_lang_text
-        
-        context.user_data['language'] = language_name
-
-        await query.edit_message_text(
-            f"Обрана мова: {full_lang_text} ✅\n\n"
-            "Тепер введіть вашу дату народження у форматі ДД.ММ.РРРР:"
-        )
-        return REGISTER_BIRTHDATE
+        if not 0 <= lang_index < len(LANGUAGES):
+            raise ValueError("language index out of range")
+        selected.symmetric_difference_update({lang_index})
+        context.user_data['language_indices'] = sorted(selected)
+        await query.edit_message_reply_markup(reply_markup=get_language_keyboard(selected))
+        await query.answer()
+        return REGISTER_LANG
 
     except (IndexError, ValueError) as e:
         # На випадок, якщо щось пішло не так із даними кнопки

@@ -96,7 +96,7 @@ def message_payload(row, teacher_id: int, viewer_role: str | None = None):
     }
 
 
-def dialog_payload(row):
+def dialog_payload(row, teacher_assignments=None):
     (
         student_id, first_name, last_name, username, _, last_text, last_type,
         timestamp, unread_count, last_from_user_id, language, level, student_status,
@@ -109,6 +109,12 @@ def dialog_payload(row):
     if last_from_user_id and int(last_from_user_id) != int(student_id):
         last_sender = "teacher"
     teacher_name = f"{teacher_first or ''} {teacher_last or ''}".strip()
+    if not teacher_name and teacher_assignments:
+        teacher_name = ", ".join(
+            f"{assignment[2] or ''} {assignment[3] or ''}".strip()
+            for assignment in teacher_assignments
+            if assignment[2] or assignment[3]
+        )
 
     return {
         "id": student_id,
@@ -131,6 +137,14 @@ def dialog_payload(row):
         "next_lesson": next_lesson or "",
         "teacher_id": teacher_id,
         "teacher_name": teacher_name,
+        "teacher_assignments": [
+            {
+                "teacher_id": assignment[0],
+                "language": assignment[1] or "",
+                "teacher_name": f"{assignment[2] or ''} {assignment[3] or ''}".strip(),
+            }
+            for assignment in (teacher_assignments or [])
+        ],
         "possible_contact": bool(possible_contact),
     }
 

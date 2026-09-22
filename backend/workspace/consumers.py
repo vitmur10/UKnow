@@ -298,7 +298,14 @@ class TeacherChatConsumer(AsyncJsonWebsocketConsumer):
 
     @sync_to_async
     def get_dialogs(self):
-        return [dialog_payload(row) for row in db.get_miniapp_dialogs(self.teacher_tg_id)]
+        return [
+            dialog_payload(
+                row,
+                [assignment for assignment in db.get_student_teacher_assignments(row[0])
+                 if self.viewer_role == "admin" or int(assignment[0]) == int(self.teacher_tg_id)],
+            )
+            for row in db.get_miniapp_dialogs(self.teacher_tg_id)
+        ]
 
     @sync_to_async
     def get_history(self):

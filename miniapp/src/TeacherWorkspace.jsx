@@ -1349,13 +1349,13 @@ function StudentInfo({ chat, close }) {
 }
 
 function StudentInfoContent({ chat, editable = false, onSave, teacherOptions = [] }) {
+  const languageOptions = ["Англійська", "Німецька", "Чеська", "Італійська", "Іспанська", "Польська", "Словацька", "Французька"];
   const [form, setForm] = useState({
     student_status: chat.student_status || "active",
     level: chat.level || "",
     learning_format: chat.learning_format || "",
     learning_goal: chat.learning_goal || "",
     admin_note: chat.admin_note || "",
-    teacher_id: chat.teacher_id ? String(chat.teacher_id) : "",
     assignment_language: "",
     assignment_teacher_id: "",
   });
@@ -1369,7 +1369,6 @@ function StudentInfoContent({ chat, editable = false, onSave, teacherOptions = [
       learning_format: chat.learning_format || "",
       learning_goal: chat.learning_goal || "",
       admin_note: chat.admin_note || "",
-      teacher_id: chat.teacher_id ? String(chat.teacher_id) : "",
       assignment_language: "",
       assignment_teacher_id: "",
     });
@@ -1404,31 +1403,26 @@ function StudentInfoContent({ chat, editable = false, onSave, teacherOptions = [
             <option value="completed">Завершив навчання</option>
           </select>
         </label>
-        {teacherOptions.length > 0 && (
-          <label className="grid gap-1">
-            <span className="text-xs text-zinc-500">Викладач</span>
-            <select
-              value={form.teacher_id}
-              onChange={(event) => setForm({ ...form, teacher_id: event.target.value })}
-              className="h-10 rounded-lg border border-zinc-200 px-3 outline-none"
-            >
-              <option value="">Без викладача</option>
-              {teacherOptions.map((teacher) => (
-                <option key={teacher.id} value={String(teacher.id)}>
-                  {teacher.name}
-                </option>
-              ))}
-            </select>
-          </label>
+        {!!chat.teacher_assignments?.length && (
+          <div className="grid gap-1 rounded-lg bg-zinc-50 p-3">
+            <span className="text-xs font-semibold text-zinc-600">Поточні призначення</span>
+            {chat.teacher_assignments.map((assignment, index) => (
+              <p key={`${assignment.teacher_id}-${assignment.language}-${index}`} className="text-sm text-zinc-700">
+                {assignment.language || "Мову не вказано"} → {assignment.teacher_name}
+              </p>
+            ))}
+          </div>
         )}
         <div className="grid gap-2 rounded-lg border border-dashed border-zinc-300 bg-zinc-50 p-3">
           <span className="text-xs font-semibold text-zinc-600">Додати викладача для окремої мови</span>
-          <input
+          <select
             value={form.assignment_language}
             onChange={(event) => setForm({ ...form, assignment_language: event.target.value })}
-            placeholder="Мова, наприклад English або Czech"
             className="h-10 rounded-lg border border-zinc-200 bg-white px-3 outline-none"
-          />
+          >
+            <option value="">Оберіть мову</option>
+            {languageOptions.map((language) => <option key={language} value={language}>{language}</option>)}
+          </select>
           {teacherOptions.length > 0 && (
             <select
               value={form.assignment_teacher_id}
@@ -1481,7 +1475,9 @@ function StudentInfoContent({ chat, editable = false, onSave, teacherOptions = [
     ["Ціль", chat.learning_goal],
     ["Наступний урок", chat.next_lesson],
     ["Примітка", chat.admin_note],
-    ...(chat.teacher_name ? [["Викладач", chat.teacher_name]] : []),
+    ...(chat.teacher_assignments?.length
+      ? [["Викладачі за мовами", chat.teacher_assignments.map((item) => `${item.language || "Мова не вказана"} — ${item.teacher_name}`).join("; ")]]
+      : chat.teacher_name ? [["Викладач", chat.teacher_name]] : []),
     ["Статус", statusLabel(chat.student_status)],
   ].filter(([, value]) => value);
 

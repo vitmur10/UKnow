@@ -10,17 +10,18 @@ from config.settings import STUDENT_CHAT_ACTIVE, STUDENT_MESSAGE_SELECT
 
 async def show_student_chat_history(update: Update, context: ContextTypes.DEFAULT_TYPE, student_id):
     # Отримуємо викладача та групи учня
-    teacher = db.get_student_teacher(student_id)
+    teachers = db.get_student_teachers(student_id)
     student_groups = db.get_student_groups(student_id)
 
     keyboard = []
 
     # Виправлений блок
-    if teacher:
-        keyboard.append([InlineKeyboardButton(
-            f"👨‍🏫 Чат з викладачем {teacher[2]} {teacher[3]}",
+    if teachers:
+        for teacher in teachers:
+            keyboard.append([InlineKeyboardButton(
+                f"👨‍🏫 {teacher[2]} {teacher[3]} · {teacher[-1] or 'мова не вказана'}",
             callback_data=f"view_chat_student_teacher_{teacher[0]}"
-        )])
+            )])
 
     if student_groups:
         # Додаємо кнопки для групових чатів
@@ -30,7 +31,7 @@ async def show_student_chat_history(update: Update, context: ContextTypes.DEFAUL
                 callback_data=f"view_chat_student_group_{group[0]}"
             )])
 
-    if not teacher and not student_groups:
+    if not teachers and not student_groups:
         await update.message.reply_text("У вас ще немає призначених чатів для перегляду.")
         return
 

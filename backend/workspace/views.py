@@ -30,6 +30,19 @@ from .sqlite_payloads import dialog_payload, message_payload
 logger = logging.getLogger(__name__)
 
 
+def _dialog_payloads(viewer_id):
+    viewer = db.get_user(viewer_id)
+    is_admin = bool(viewer and viewer[4] == "admin")
+    return [
+        dialog_payload(
+            row,
+            [assignment for assignment in db.get_student_teacher_assignments(row[0])
+             if is_admin or int(assignment[0]) == int(viewer_id)],
+        )
+        for row in db.get_miniapp_dialogs(viewer_id)
+    ]
+
+
 @csrf_exempt
 @require_POST
 def miniapp_auth(request):
@@ -76,7 +89,7 @@ def miniapp_bootstrap(request):
     if not user or user[4] not in ("teacher", "admin") or not bool(user[9]):
         return JsonResponse({"error": "Teacher access required"}, status=403)
 
-    dialogs = [dialog_payload(row) for row in db.get_miniapp_dialogs(teacher_id)]
+    dialogs = _dialog_payloads(teacher_id)
     messages = [message_payload(row, teacher_id, user[4]) for row in db.get_miniapp_history(teacher_id)]
     lessons = db.get_miniapp_lessons(teacher_id)
     teachers = [
@@ -111,7 +124,7 @@ def _broadcast_miniapp_state(viewer_id):
         return
     payload = {
         "type": "chat.history",
-        "chats": [dialog_payload(row) for row in db.get_miniapp_dialogs(viewer_id)],
+        "chats": _dialog_payloads(viewer_id),
         "messages": [message_payload(row, viewer_id, viewer[4]) for row in db.get_miniapp_history(viewer_id)],
         "lessons": db.get_miniapp_lessons(viewer_id),
     }
@@ -218,10 +231,9 @@ def miniapp_update_student(request):
     except ValueError:
         return JsonResponse({"error": "Invalid student_id"}, status=400)
 
-    previous_teacher = db.get_student_teacher(student_id)
+    previous_teachers = db.get_student_teachers(student_id)
     affected_viewers = {user_id}
-    if previous_teacher:
-        affected_viewers.add(int(previous_teacher[0]))
+    affected_viewers.update(int(teacher[0]) for teacher in previous_teachers)
 
     status = request.POST.get("student_status")
     if status in {"active", "paused", "completed"}:
@@ -261,7 +273,7 @@ def miniapp_update_student(request):
         learning_goal=request.POST.get("learning_goal"),
         admin_note=request.POST.get("admin_note"),
     )
-    dialogs = [dialog_payload(row) for row in db.get_miniapp_dialogs(user_id)]
+    dialogs = _dialog_payloads(user_id)
     teachers = [
         {"id": row[0], "name": f"{row[2]} {row[3]}".strip() or row[1] or str(row[0])}
         for row in db.get_users_by_role("teacher")

@@ -61,11 +61,16 @@ async def sync_students_command(update: Update, context: ContextTypes.DEFAULT_TY
 
             # Якщо не в групі — шукаємо індивідуала
             if not found:
-                cursor.execute(
-                    "SELECT u.first_name, u.last_name FROM assignments a JOIN users u ON a.teacher_id = u.user_id WHERE a.student_id = ? AND a.is_active = 1",
-                    (s_id,))
-                res = cursor.fetchone()
-                if res: teacher = f"{res[0]} {res[1] if res[1] else ''}"
+                cursor.execute('''SELECT COALESCE(NULLIF(a.language, ''), ?), u.first_name, u.last_name
+                                  FROM assignments a JOIN users u ON a.teacher_id = u.user_id
+                                  WHERE a.student_id = ? AND a.is_active = 1
+                                  ORDER BY a.language, u.first_name''', (s[6], s_id))
+                assignments = cursor.fetchall()
+                if assignments:
+                    teacher = ", ".join(
+                        f"{language}: {first or ''} {last or ''}".strip()
+                        for language, first, last in assignments
+                    )
 
             # Формуємо рядок (7 колонок)
             all_rows.append([
@@ -131,14 +136,16 @@ async def sync_teachers_command(update: Update, context: ContextTypes.DEFAULT_TY
 
             # 2. Індивідуали
             cursor.execute('''
-                SELECT u.first_name, u.last_name 
+                SELECT COALESCE(NULLIF(a.language, ''), s.language), s.first_name, s.last_name
                 FROM assignments a
-                JOIN users u ON a.student_id = u.user_id
+                JOIN users s ON a.student_id = s.user_id
                 WHERE a.teacher_id = ? AND a.is_active = 1
             ''', (t_id,))
 
-            for s in cursor.fetchall():
-                s_name = f"{s[0]} {s[1] if s[1] else ''}".strip()
+            for assigned_language, first_name, last_name in cursor.fetchall():
+                s_name = f"{first_name or ''} {last_name or ''}".strip()
+                if assigned_language:
+                    s_name = f"{s_name} ({assigned_language})"
                 teacher_students.add(s_name)
 
             # 3. Формуємо рядок для одного викладача

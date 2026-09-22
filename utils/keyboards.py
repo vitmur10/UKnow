@@ -29,13 +29,17 @@ def get_main_keyboard(role):
 
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-def get_language_keyboard():
+def get_language_keyboard(selected_indices=None):
+    selected_indices = set(selected_indices or [])
     keyboard = []
     for i in range(0, len(LANGUAGES), 2):
-        row = [InlineKeyboardButton(LANGUAGES[i], callback_data=f"lang_{i}")]
+        first = f"✅ {LANGUAGES[i]}" if i in selected_indices else LANGUAGES[i]
+        row = [InlineKeyboardButton(first, callback_data=f"lang_{i}")]
         if i + 1 < len(LANGUAGES):
-            row.append(InlineKeyboardButton(LANGUAGES[i + 1], callback_data=f"lang_{i+1}"))
+            second = f"✅ {LANGUAGES[i + 1]}" if i + 1 in selected_indices else LANGUAGES[i + 1]
+            row.append(InlineKeyboardButton(second, callback_data=f"lang_{i+1}"))
         keyboard.append(row)
+    keyboard.append([InlineKeyboardButton("Готово ✅", callback_data="lang_done")])
     return InlineKeyboardMarkup(keyboard)
 
 def get_chat_active_keyboard():

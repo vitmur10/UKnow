@@ -236,7 +236,7 @@ async def student_message_start(update: Update, context: ContextTypes.DEFAULT_TY
 
     for teacher in teachers:
         keyboard.append([InlineKeyboardButton(
-            f"👨‍🏫 {teacher[2]} {teacher[3]}",
+            f"👨‍🏫 {teacher[2]} {teacher[3]} · {teacher[-1] or 'мова не вказана'}",
             callback_data=f"student_chat_teacher_{teacher[0]}"
         )])
 
@@ -246,7 +246,7 @@ async def student_message_start(update: Update, context: ContextTypes.DEFAULT_TY
             callback_data=f"student_chat_group_{group[0]}"
         )])
 
-    if not teacher and not groups:
+    if not teachers and not groups:
         await update.message.reply_text(
             "На жаль, у вас немає призначеного викладача або групи для початку діалогу.")
         return

@@ -940,6 +940,25 @@ async def admin_add_lesson_time(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 # --- ІНЛАЙН КНОПКИ АДМІНА ---
+async def _complete_teacher_assignment(query, context, teacher_id, student_id, language=None):
+    db.assign_teacher_to_student(teacher_id, student_id, language)
+    teacher = db.get_user(teacher_id)
+    student = db.get_user(student_id)
+    language_label = f" · {language}" if language else ""
+    await query.edit_message_text(
+        f"✅ Призначення завершено!\n\n👨‍🏫 Викладач: {teacher[2]} {teacher[3]}"
+        f"\n👨‍🎓 Учень: {student[2]} {student[3]}{language_label}"
+    )
+    for target_id, text in [
+        (teacher_id, f"👨‍🎓 Вам призначено нового учня:\n{student[2]} {student[3]}{language_label}"),
+        (student_id, f"👨‍🏫 Вам призначено викладача:\n{teacher[2]} {teacher[3]}{language_label}"),
+    ]:
+        try:
+            await context.bot.send_message(target_id, text)
+        except Exception:
+            pass
+
+
 async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
 
@@ -1926,7 +1945,8 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                   "assign_teacher", "add_teacher", "show_user_filters_menu"] or any(
         data.startswith(prefix) for prefix in
         ["change_student_teacher", "change_teacher_for_student_", "assign_new_teacher_",
-         "remove_teacher_from_student_", "select_teacher_", "assign_to_student_"]):
+         "remove_teacher_from_student_", "select_teacher_", "assign_to_student_", "assign_language_",
+         "reassign_language_"]):
 
         # 1. Прості команди
         if data == "list_by_teachers":
@@ -2050,21 +2070,49 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             try:
-                db.assign_teacher_to_student(teacher_id, student_id)
-                teacher = db.get_user(teacher_id)
                 student = db.get_user(student_id)
-
-                await query.edit_message_text(
-                    f"✅ Призначення завершено!\n\n👨‍🏫 Викладач: {teacher[2]} {teacher[3]}\n👨‍🎓 Учень: {student[2]} {student[3]}")
-
-                for target_id, text in [(teacher_id, f"👨‍🎓 Вам призначено нового учня:\n{student[2]} {student[3]}"),
-                                        (student_id, f"👨‍🏫 Вам призначено викладача:\n{teacher[2]} {teacher[3]}")]:
-                    try:
-                        await context.bot.send_message(target_id, text)
-                    except:
-                        pass
+                languages = [part.strip() for part in (student[6] or "").split(",") if part.strip()]
+                if len(languages) > 1:
+                    teacher = db.get_user(teacher_id)
+                    keyboard = [[InlineKeyboardButton(
+                        f"🗣 {language}",
+                        callback_data=f"assign_language_{student_id}_{teacher_id}_{index}"
+                    )] for index, language in enumerate(languages)]
+                    keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data="back_to_admin_users")])
+                    await query.edit_message_text(
+                        f"Оберіть мову для викладача {teacher[2]} {teacher[3]}:",
+                        reply_markup=InlineKeyboardMarkup(keyboard),
+                    )
+                else:
+                    await _complete_teacher_assignment(
+                        query, context, teacher_id, student_id, languages[0] if languages else None
+                    )
             except Exception as e:
                 await query.edit_message_text(f"❌ Помилка призначення: {str(e)}")
+            return
+
+        elif data.startswith("assign_language_"):
+            try:
+                _, _, student_raw, teacher_raw, index_raw = data.split("_")
+                student_id, teacher_id = int(student_raw), int(teacher_raw)
+                student = db.get_user(student_id)
+                languages = [part.strip() for part in (student[6] or "").split(",") if part.strip()]
+                language = languages[int(index_raw)]
+                await _complete_teacher_assignment(query, context, teacher_id, student_id, language)
+            except Exception as e:
+                await query.edit_message_text(f"❌ Не вдалося призначити викладача: {e}")
+            return
+
+        elif data.startswith("reassign_language_"):
+            try:
+                _, _, student_raw, teacher_raw, index_raw = data.split("_")
+                student_id, teacher_id = int(student_raw), int(teacher_raw)
+                student = db.get_user(student_id)
+                languages = [part.strip() for part in (student[6] or "").split(",") if part.strip()]
+                language = languages[int(index_raw)]
+                await _complete_teacher_assignment(query, context, teacher_id, student_id, language)
+            except Exception as e:
+                await query.edit_message_text(f"❌ Не вдалося змінити викладача: {e}")
             return
 
         # 7. Зміна викладача учня (Вибір учня зі сторінками)
@@ -2119,15 +2167,15 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data.startswith("change_teacher_for_student_"):
             student_id = int(data.split("_")[4])
             student = db.get_user(student_id)
-            current_teacher = db.get_student_teacher(student_id)
+            current_assignments = db.get_student_teacher_assignments(student_id)
 
             teachers = db.get_users_by_role('teacher')
-            # Відфільтровуємо того, хто вже призначений
-            available_teachers = [t for t in teachers if not current_teacher or t[0] != current_teacher[0]]
+            # Той самий викладач може вести іншу мову цього студента.
+            available_teachers = teachers
 
             keyboard = []
-            if current_teacher:
-                keyboard.append([InlineKeyboardButton("🗑 Прибрати викладача",
+            if current_assignments:
+                keyboard.append([InlineKeyboardButton("🗑 Прибрати всі призначення",
                                                       callback_data=f"remove_teacher_from_student_{student_id}")])
 
             for t in available_teachers:
@@ -2137,7 +2185,9 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append([InlineKeyboardButton("⬅️ До учнів", callback_data="change_student_teacher")])
 
             txt = f"🔄 Зміна викладача для {student[2]} {student[3]}\n"
-            txt += f"Зараз: {current_teacher[2]} {current_teacher[3]}" if current_teacher else "Зараз: без викладача"
+            txt += "Поточні призначення:\n" + "\n".join(
+                f"• {row[1] or 'Мова не вказана'} — {row[2]} {row[3]}" for row in current_assignments
+            ) if current_assignments else "Зараз: без викладача"
 
             await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup(keyboard))
             return
@@ -2146,24 +2196,23 @@ async def admin_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data.startswith("assign_new_teacher_"):
             parts = data.split("_")
             student_id, new_teacher_id = int(parts[3]), int(parts[4])
-
-            old_teacher = db.get_student_teacher(student_id)
-            db.assign_teacher_to_student(new_teacher_id, student_id)
-
             student = db.get_user(student_id)
             new_teacher = db.get_user(new_teacher_id)
-
-            await query.edit_message_text(f"✅ Успішно змінено!\n👨‍🎓 {student[2]} ➡️ 👨‍🏫 {new_teacher[2]}")
-
-            # Сповіщення (копіюємо з вашої старої версії)
-            for cid, msg in [
-                (new_teacher_id, f"👨‍🎓 Новий учень: {student[2]} {student[3]}"),
-                (student_id, f"👨‍🏫 Ваш новий викладач: {new_teacher[2]} {new_teacher[3]}"),
-            ]:
-                try:
-                    await context.bot.send_message(cid, msg)
-                except:
-                    pass
+            languages = [part.strip() for part in (student[6] or "").split(",") if part.strip()]
+            if len(languages) > 1:
+                keyboard = [[InlineKeyboardButton(
+                    f"🗣 {language}",
+                    callback_data=f"reassign_language_{student_id}_{new_teacher_id}_{index}"
+                )] for index, language in enumerate(languages)]
+                keyboard.append([InlineKeyboardButton("❌ Скасувати", callback_data="back_to_admin_users")])
+                await query.edit_message_text(
+                    f"Оберіть мову, для якої призначити {new_teacher[2]} {new_teacher[3]}:",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                )
+            else:
+                await _complete_teacher_assignment(
+                    query, context, new_teacher_id, student_id, languages[0] if languages else None
+                )
             return
 
         # 10. Видалення призначення

@@ -124,6 +124,10 @@ class Database:
             cursor.execute("ALTER TABLE assignments ADD COLUMN language TEXT")
         except Exception:
             pass
+        cursor.execute('''UPDATE assignments
+                          SET language = (SELECT language FROM users WHERE users.user_id = assignments.student_id)
+                          WHERE language IS NULL AND is_active = 1
+                            AND instr(COALESCE((SELECT language FROM users WHERE users.user_id = assignments.student_id), ''), ',') = 0''')
 
         # Доставлені копії повідомлень (для функції "видалити для всіх"):
         # для кожного запису messages зберігаємо telegram message_id у кожному чаті,
@@ -323,6 +327,19 @@ class Database:
     def assign_teacher_to_student(self, teacher_id, student_id, language=None):
         conn = self._connect()
         cursor = conn.cursor()
+        if language:
+            student_row = cursor.execute(
+                "SELECT language FROM users WHERE user_id = ?", (student_id,)
+            ).fetchone()
+            current_languages = [part.strip() for part in ((student_row or [""])[0] or "").split(",") if part.strip()]
+            if language not in current_languages:
+                current_languages.append(language)
+                cursor.execute("UPDATE users SET language = ? WHERE user_id = ?",
+                               (", ".join(current_languages), student_id))
+            # На одну мову в студента призначається один активний викладач.
+            cursor.execute('''UPDATE assignments SET is_active = 0
+                              WHERE student_id = ? AND is_active = 1 AND language = ?
+                                AND teacher_id <> ?''', (student_id, language, teacher_id))
         # Дозволяємо кількох активних викладачів, але не створюємо дублікат.
         cursor.execute('''INSERT INTO assignments (teacher_id, student_id, language, is_active)
                           SELECT ?, ?, ?, 1
@@ -338,10 +355,27 @@ class Database:
     def get_student_teachers(self, student_id):
         conn = self._connect()
         cursor = conn.cursor()
-        cursor.execute('''SELECT u.* FROM users u
+        cursor.execute('''SELECT u.*, COALESCE(NULLIF(a.language, ''), s.language, '') AS assigned_language
+                          FROM users u
                           JOIN assignments a ON u.user_id = a.teacher_id
+                          JOIN users s ON s.user_id = a.student_id
                           WHERE a.student_id = ? AND a.is_active = 1
-                          ORDER BY u.first_name, u.last_name''', (student_id,))
+                          ORDER BY COALESCE(NULLIF(a.language, ''), s.language, ''), u.first_name, u.last_name''', (student_id,))
+        result = cursor.fetchall()
+        conn.close()
+        return result
+
+    def get_student_teacher_assignments(self, student_id):
+        conn = self._connect()
+        cursor = conn.cursor()
+        cursor.execute('''SELECT a.teacher_id,
+                                 COALESCE(NULLIF(a.language, ''), s.language, ''),
+                                 u.first_name, u.last_name, u.username
+                          FROM assignments a
+                          JOIN users u ON u.user_id = a.teacher_id
+                          JOIN users s ON s.user_id = a.student_id
+                          WHERE a.student_id = ? AND a.is_active = 1
+                          ORDER BY a.language, u.first_name, u.last_name''', (student_id,))
         result = cursor.fetchall()
         conn.close()
         return result
@@ -361,7 +395,8 @@ class Database:
         cursor = conn.cursor()
         cursor.execute('''SELECT u.* FROM users u 
                          JOIN assignments a ON u.user_id = a.teacher_id 
-                         WHERE a.student_id = ? AND a.is_active = 1''', (student_id,))
+                         WHERE a.student_id = ? AND a.is_active = 1
+                         ORDER BY a.assigned_date, a.id LIMIT 1''', (student_id,))
         result = cursor.fetchone()
         conn.close()
         return result
@@ -831,10 +866,17 @@ class Database:
                               SELECT u.user_id, u.first_name, u.last_name, u.username,
                                      lm.last_message_id, m.message_text, m.message_type,
                                      m.timestamp, COALESCE(un.unread_count, 0),
-                                     m.from_user_id, u.language, u.level,
+                                         m.from_user_id,
+                                         COALESCE((SELECT GROUP_CONCAT(DISTINCT COALESCE(NULLIF(ax.language, ''), u.language))
+                                                   FROM assignments ax WHERE ax.student_id = u.user_id AND ax.is_active = 1), u.language),
+                                         u.level,
                                      COALESCE(u.student_status, 'active'),
                                       u.learning_format, u.learning_goal, u.admin_note,
-                                     t.first_name, t.last_name, a.teacher_id,
+                                     (SELECT GROUP_CONCAT(DISTINCT TRIM(COALESCE(tx.first_name,'') || ' ' || COALESCE(tx.last_name,'')))
+                                      FROM assignments ax JOIN users tx ON tx.user_id = ax.teacher_id
+                                      WHERE ax.student_id = u.user_id AND ax.is_active = 1),
+                                     NULL,
+                                     (SELECT MIN(ax.teacher_id) FROM assignments ax WHERE ax.student_id = u.user_id AND ax.is_active = 1),
                                      COALESCE(m.is_deleted, 0), COALESCE(m.possible_contact, 0),
                                      (SELECT MIN(lesson_slot)
                                       FROM (
@@ -856,8 +898,6 @@ class Database:
                                       ))
                               FROM dialog_students ds
                               JOIN users u ON u.user_id = ds.user_id
-                              LEFT JOIN assignments a ON a.student_id = u.user_id AND a.is_active = 1
-                              LEFT JOIN users t ON t.user_id = a.teacher_id
                               LEFT JOIN last_messages lm ON lm.student_id = u.user_id
                               LEFT JOIN messages m ON m.id = lm.last_message_id
                               LEFT JOIN unread un ON un.student_id = u.user_id
@@ -900,10 +940,8 @@ class Database:
                                   LEFT JOIN users tu ON tu.user_id = m.to_user_id
                                   WHERE m.group_id IS NULL
                                     AND COALESCE(m.is_deleted, 0) = 0
-                                    AND (
-                                        m.from_user_id IN (SELECT user_id FROM dialog_students)
-                                        OR m.to_user_id IN (SELECT user_id FROM dialog_students)
-                                    )
+                                     AND ((m.from_user_id = ? AND m.to_user_id IN (SELECT user_id FROM dialog_students))
+                                       OR (m.to_user_id = ? AND m.from_user_id IN (SELECT user_id FROM dialog_students)))
                                   GROUP BY student_id
                               ),
                               unread AS (
@@ -917,7 +955,11 @@ class Database:
                               SELECT u.user_id, u.first_name, u.last_name, u.username,
                                      lm.last_message_id, m.message_text, m.message_type,
                                      m.timestamp, COALESCE(un.unread_count, 0),
-                                     m.from_user_id, u.language, u.level,
+                                     m.from_user_id,
+                                     COALESCE((SELECT GROUP_CONCAT(DISTINCT COALESCE(NULLIF(ax.language, ''), u.language))
+                                               FROM assignments ax
+                                               WHERE ax.student_id = u.user_id AND ax.teacher_id = ? AND ax.is_active = 1), u.language),
+                                     u.level,
                                      COALESCE(u.student_status, 'active'),
                                      u.learning_format, u.learning_goal, u.admin_note,
                                      NULL, NULL, ?,
@@ -950,7 +992,7 @@ class Database:
                               WHERE u.is_active = 1
                               ORDER BY COALESCE(m.timestamp, '1970-01-01') DESC,
                                        u.first_name COLLATE NOCASE ASC''',
-                           (teacher_id, teacher_id, teacher_id, teacher_id, teacher_id, teacher_id, teacher_id, teacher_id))
+                           (teacher_id, teacher_id, teacher_id, teacher_id, teacher_id, teacher_id, teacher_id, teacher_id, teacher_id, teacher_id, teacher_id))
         result = cursor.fetchall()
         conn.close()
         return result
@@ -970,6 +1012,10 @@ class Database:
         if student_id:
             where += ''' AND (m.from_user_id = ? OR m.to_user_id = ?)'''
             params.extend([student_id, student_id])
+            if not is_admin:
+                where += ''' AND ((m.from_user_id = ? AND m.to_user_id = ?)
+                                  OR (m.from_user_id = ? AND m.to_user_id = ?))'''
+                params.extend([teacher_id, student_id, student_id, teacher_id])
         elif not is_admin:
             student_ids = self.get_miniapp_student_ids_for_teacher(teacher_id)
             if student_ids:
@@ -977,6 +1023,8 @@ class Database:
                 where += f''' AND (m.from_user_id IN ({placeholders}) OR m.to_user_id IN ({placeholders}))'''
                 params.extend(student_ids)
                 params.extend(student_ids)
+                where += " AND (m.from_user_id = ? OR m.to_user_id = ?)"
+                params.extend([teacher_id, teacher_id])
             else:
                 where += " AND 1 = 0"
 
@@ -1224,12 +1272,15 @@ class Database:
                               WHERE l.teacher_id = ? AND l.group_id IS NOT NULL AND gm.is_active = 1
                           )
                           SELECT DISTINCT u.user_id, u.username, u.first_name, u.last_name,
-                                          u.role, u.phone, u.language
+                                          u.role, u.phone,
+                                          COALESCE((SELECT GROUP_CONCAT(DISTINCT COALESCE(NULLIF(a.language, ''), u.language))
+                                                    FROM assignments a
+                                                    WHERE a.student_id = u.user_id AND a.teacher_id = ? AND a.is_active = 1), u.language)
                           FROM teacher_students ts
                           JOIN users u ON u.user_id = ts.student_id
                           WHERE u.role = 'student' AND u.is_active = 1
                           ORDER BY u.first_name COLLATE NOCASE, u.last_name COLLATE NOCASE''',
-                       (teacher_id, teacher_id, teacher_id, teacher_id))
+                       (teacher_id, teacher_id, teacher_id, teacher_id, teacher_id))
         result = cursor.fetchall()
         conn.close()
         return result

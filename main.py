@@ -224,7 +224,7 @@ def main():
         states={
             REGISTER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_name)],
             REGISTER_LANG: [
-                CallbackQueryHandler(register_language, pattern="^lang_"),
+                CallbackQueryHandler(register_language, pattern=r"^lang_(?:\d+|done)$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, register_language)
             ],
             REGISTER_BIRTHDATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, register_birthdate)],
