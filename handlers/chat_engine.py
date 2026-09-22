@@ -229,12 +229,12 @@ async def student_message_start(update: Update, context: ContextTypes.DEFAULT_TY
     """Показує учневі список викладачів та груп для чату."""
     user_id = update.effective_user.id
 
-    teacher = db.get_student_teacher(user_id)
+    teachers = db.get_student_teachers(user_id)
     groups = db.get_student_groups(user_id)
 
     keyboard = []
 
-    if teacher:
+    for teacher in teachers:
         keyboard.append([InlineKeyboardButton(
             f"👨‍🏫 {teacher[2]} {teacher[3]}",
             callback_data=f"student_chat_teacher_{teacher[0]}"

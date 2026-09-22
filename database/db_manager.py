@@ -318,13 +318,26 @@ class Database:
     def assign_teacher_to_student(self, teacher_id, student_id):
         conn = self._connect()
         cursor = conn.cursor()
-        # Deactivate old assignments
-        cursor.execute("UPDATE assignments SET is_active = 0 WHERE student_id = ?", (student_id,))
-        # Create new assignment
-        cursor.execute('''INSERT INTO assignments (teacher_id, student_id) 
-                         VALUES (?, ?)''', (teacher_id, student_id))
+        # Дозволяємо кількох активних викладачів, але не створюємо дублікат.
+        cursor.execute('''INSERT INTO assignments (teacher_id, student_id, is_active)
+                          SELECT ?, ?, 1
+                          WHERE NOT EXISTS (
+                              SELECT 1 FROM assignments
+                              WHERE teacher_id = ? AND student_id = ? AND is_active = 1
+                          )''', (teacher_id, student_id, teacher_id, student_id))
         conn.commit()
         conn.close()
+
+    def get_student_teachers(self, student_id):
+        conn = self._connect()
+        cursor = conn.cursor()
+        cursor.execute('''SELECT u.* FROM users u
+                          JOIN assignments a ON u.user_id = a.teacher_id
+                          WHERE a.student_id = ? AND a.is_active = 1
+                          ORDER BY u.first_name, u.last_name''', (student_id,))
+        result = cursor.fetchall()
+        conn.close()
+        return result
 
     # def get_teacher_students(self, teacher_id):
     # conn = self._connect()
