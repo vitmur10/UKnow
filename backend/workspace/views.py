@@ -239,6 +239,21 @@ def miniapp_update_student(request):
             return JsonResponse({"error": "Invalid teacher_id"}, status=400)
         affected_viewers.add(new_teacher_id)
 
+    assignment_teacher_raw = request.POST.get("assignment_teacher_id")
+    assignment_language = (request.POST.get("assignment_language") or "").strip()
+    if assignment_teacher_raw or assignment_language:
+        if not assignment_teacher_raw or not assignment_language:
+            return JsonResponse({"error": "Для нового призначення вкажіть мову та викладача"}, status=400)
+        try:
+            assignment_teacher_id = int(assignment_teacher_raw)
+        except ValueError:
+            return JsonResponse({"error": "Invalid assignment_teacher_id"}, status=400)
+        assignment_teacher = db.get_user(assignment_teacher_id)
+        if not assignment_teacher or assignment_teacher[4] != "teacher":
+            return JsonResponse({"error": "Викладача не знайдено"}, status=400)
+        db.assign_teacher_to_student(assignment_teacher_id, student_id, assignment_language)
+        affected_viewers.add(assignment_teacher_id)
+
     db.update_student_profile(
         student_id,
         level=request.POST.get("level"),

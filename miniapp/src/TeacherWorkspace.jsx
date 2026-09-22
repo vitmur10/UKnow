@@ -1356,6 +1356,8 @@ function StudentInfoContent({ chat, editable = false, onSave, teacherOptions = [
     learning_goal: chat.learning_goal || "",
     admin_note: chat.admin_note || "",
     teacher_id: chat.teacher_id ? String(chat.teacher_id) : "",
+    assignment_language: "",
+    assignment_teacher_id: "",
   });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -1368,6 +1370,8 @@ function StudentInfoContent({ chat, editable = false, onSave, teacherOptions = [
       learning_goal: chat.learning_goal || "",
       admin_note: chat.admin_note || "",
       teacher_id: chat.teacher_id ? String(chat.teacher_id) : "",
+      assignment_language: "",
+      assignment_teacher_id: "",
     });
   }, [chat]);
 
@@ -1417,6 +1421,27 @@ function StudentInfoContent({ chat, editable = false, onSave, teacherOptions = [
             </select>
           </label>
         )}
+        <div className="grid gap-2 rounded-lg border border-dashed border-zinc-300 bg-zinc-50 p-3">
+          <span className="text-xs font-semibold text-zinc-600">Додати викладача для окремої мови</span>
+          <input
+            value={form.assignment_language}
+            onChange={(event) => setForm({ ...form, assignment_language: event.target.value })}
+            placeholder="Мова, наприклад English або Czech"
+            className="h-10 rounded-lg border border-zinc-200 bg-white px-3 outline-none"
+          />
+          {teacherOptions.length > 0 && (
+            <select
+              value={form.assignment_teacher_id}
+              onChange={(event) => setForm({ ...form, assignment_teacher_id: event.target.value })}
+              className="h-10 rounded-lg border border-zinc-200 bg-white px-3 outline-none"
+            >
+              <option value="">Оберіть викладача</option>
+              {teacherOptions.map((teacher) => (
+                <option key={teacher.id} value={String(teacher.id)}>{teacher.name}</option>
+              ))}
+            </select>
+          )}
+        </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <TextField label="Рівень" value={form.level} onChange={(level) => setForm({ ...form, level })} />
           <TextField label="Формат" value={form.learning_format} onChange={(learning_format) => setForm({ ...form, learning_format })} />

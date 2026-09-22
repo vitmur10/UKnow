@@ -40,6 +40,7 @@ class Database:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             teacher_id INTEGER,
             student_id INTEGER,
+            language TEXT,
             assigned_date DATETIME DEFAULT CURRENT_TIMESTAMP,
             is_active BOOLEAN DEFAULT 1,
             FOREIGN KEY (teacher_id) REFERENCES users (user_id),
@@ -119,6 +120,10 @@ class Database:
             edited_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (message_id) REFERENCES messages (id)
         )''')
+        try:
+            cursor.execute("ALTER TABLE assignments ADD COLUMN language TEXT")
+        except Exception:
+            pass
 
         # Доставлені копії повідомлень (для функції "видалити для всіх"):
         # для кожного запису messages зберігаємо telegram message_id у кожному чаті,
@@ -315,16 +320,18 @@ class Database:
         conn.close()
         return result
 
-    def assign_teacher_to_student(self, teacher_id, student_id):
+    def assign_teacher_to_student(self, teacher_id, student_id, language=None):
         conn = self._connect()
         cursor = conn.cursor()
         # Дозволяємо кількох активних викладачів, але не створюємо дублікат.
-        cursor.execute('''INSERT INTO assignments (teacher_id, student_id, is_active)
-                          SELECT ?, ?, 1
+        cursor.execute('''INSERT INTO assignments (teacher_id, student_id, language, is_active)
+                          SELECT ?, ?, ?, 1
                           WHERE NOT EXISTS (
                               SELECT 1 FROM assignments
-                              WHERE teacher_id = ? AND student_id = ? AND is_active = 1
-                          )''', (teacher_id, student_id, teacher_id, student_id))
+                              WHERE teacher_id = ? AND student_id = ?
+                                AND COALESCE(language, '') = COALESCE(?, '')
+                                AND is_active = 1
+                           )''', (teacher_id, student_id, language, teacher_id, student_id, language))
         conn.commit()
         conn.close()
 
