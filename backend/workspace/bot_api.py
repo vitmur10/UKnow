@@ -1,5 +1,6 @@
 import httpx
 from django.conf import settings
+from utils.telegram_delivery import delivery_error_message, is_missing_reply
 
 
 class TelegramDeliveryError(RuntimeError):
@@ -17,12 +18,20 @@ class TelegramDeliveryError(RuntimeError):
     @property
     def requires_start(self) -> bool:
         text = self.description.lower()
-        return self.status_code == 403 and (
+        return self.status_code in (400, 403) and (
             "bot was blocked" in text
             or "bot can't initiate conversation" in text
             or "bot can\u2019t initiate conversation" in text
-            or "user is deactivated" in text
+            or "chat not found" in text
         )
+
+    @property
+    def user_message(self) -> str:
+        return delivery_error_message(self.description, self.status_code)
+
+    @property
+    def missing_reply(self) -> bool:
+        return is_missing_reply(self.description)
 
 
 def _raise_for_delivery(response: httpx.Response) -> None:
@@ -43,7 +52,17 @@ async def send_text_to_student(
             f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage",
             json=payload,
         )
-        _raise_for_delivery(response)
+        try:
+            _raise_for_delivery(response)
+        except TelegramDeliveryError as exc:
+            if not reply_to_message_id or not exc.missing_reply:
+                raise
+            payload.pop("reply_to_message_id")
+            response = await client.post(
+                f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage",
+                json=payload,
+            )
+            _raise_for_delivery(response)
     return response.json().get("result", {}).get("message_id")
 
 
@@ -79,13 +98,23 @@ async def send_attachment_to_student(
     if reply_to_message_id:
         data["reply_to_message_id"] = str(reply_to_message_id)
     async with httpx.AsyncClient(timeout=60) as client:
-        with open(file_path, "rb") as media_file:
-            response = await client.post(
-                f"https://api.telegram.org/bot{settings.BOT_TOKEN}/{method}",
-                data=data,
-                files={field_name: media_file},
-            )
-        _raise_for_delivery(response)
+        async def post_attachment():
+            with open(file_path, "rb") as media_file:
+                return await client.post(
+                    f"https://api.telegram.org/bot{settings.BOT_TOKEN}/{method}",
+                    data=data,
+                    files={field_name: media_file},
+                )
+
+        response = await post_attachment()
+        try:
+            _raise_for_delivery(response)
+        except TelegramDeliveryError as exc:
+            if not reply_to_message_id or not exc.missing_reply:
+                raise
+            data.pop("reply_to_message_id")
+            response = await post_attachment()
+            _raise_for_delivery(response)
     return response.json().get("result", {}).get("message_id")
 
 

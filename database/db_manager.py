@@ -444,7 +444,7 @@ class Database:
         cursor = conn.cursor()
         cursor.execute('''SELECT u.* FROM users u 
                          JOIN group_members gm ON u.user_id = gm.student_id 
-                         WHERE gm.group_id = ? AND gm.is_active = 1''', (group_id,))
+                         WHERE gm.group_id = ? AND gm.is_active = 1 AND u.is_active = 1''', (group_id,))
         result = cursor.fetchall()
         conn.close()
         return result

@@ -1,4 +1,5 @@
 import base64
+import logging
 import mimetypes
 import uuid
 from pathlib import Path
@@ -20,6 +21,9 @@ from .bot_api import (
 )
 from .sqlite_payloads import dialog_payload, message_payload
 from .telegram_auth import verify_ws_token
+
+
+logger = logging.getLogger(__name__)
 
 
 class TeacherChatConsumer(AsyncJsonWebsocketConsumer):
@@ -83,14 +87,14 @@ class TeacherChatConsumer(AsyncJsonWebsocketConsumer):
         try:
             sent_message_id = await send_text_to_student(student_id, text, reply_to_tg_message_id)
         except TelegramDeliveryError as exc:
-            message = (
-                "Учень ще не активував нового бота. Попросіть його відкрити бота й натиснути /start."
-                if exc.requires_start else "Не вдалося надіслати повідомлення у Telegram. Спробуйте ще раз."
-            )
-            await self.send_json({"type": "error", "message": message})
+            logger.warning("WebSocket text delivery failed for student %s: HTTP %s %s",
+                           student_id, exc.status_code, exc.description)
+            await self.send_json({"type": "error", "message": exc.user_message})
             return
-        except Exception:
-            await self.send_json({"type": "error", "message": "Не вдалося надіслати повідомлення у Telegram. Спробуйте ще раз."})
+        except Exception as exc:
+            logger.warning("Unexpected WebSocket text delivery error for student %s: %s",
+                           student_id, type(exc).__name__)
+            await self.send_json({"type": "error", "message": "Зараз немає зв’язку з Telegram. Спробуйте ще раз трохи пізніше."})
             return
 
         message_id = await sync_to_async(db.save_message)(
@@ -126,9 +130,17 @@ class TeacherChatConsumer(AsyncJsonWebsocketConsumer):
 
         try:
             sent_message_id = await send_voice_to_student(student_id, str(voice_path))
-        except Exception:
+        except Exception as exc:
             voice_path.unlink(missing_ok=True)
-            await self.send_json({"type": "error", "message": "Не вдалося надіслати голосове повідомлення"})
+            if isinstance(exc, TelegramDeliveryError):
+                logger.warning("WebSocket voice delivery failed for student %s: HTTP %s %s",
+                               student_id, exc.status_code, exc.description)
+                message = exc.user_message
+            else:
+                logger.warning("Unexpected WebSocket voice delivery error for student %s: %s",
+                               student_id, type(exc).__name__)
+                message = "Зараз немає зв’язку з Telegram. Спробуйте ще раз трохи пізніше."
+            await self.send_json({"type": "error", "message": message})
             return
         message_id = await sync_to_async(db.save_message)(
             from_user_id=self.teacher_tg_id,
@@ -185,9 +197,17 @@ class TeacherChatConsumer(AsyncJsonWebsocketConsumer):
                 caption,
                 reply_to_tg_message_id,
             )
-        except Exception:
+        except Exception as exc:
             media_path.unlink(missing_ok=True)
-            await self.send_json({"type": "error", "message": "Не вдалося надіслати файл у Telegram"})
+            if isinstance(exc, TelegramDeliveryError):
+                logger.warning("WebSocket attachment delivery failed for student %s: HTTP %s %s",
+                               student_id, exc.status_code, exc.description)
+                message = exc.user_message
+            else:
+                logger.warning("Unexpected WebSocket attachment delivery error for student %s: %s",
+                               student_id, type(exc).__name__)
+                message = "Зараз немає зв’язку з Telegram. Спробуйте ще раз трохи пізніше."
+            await self.send_json({"type": "error", "message": message})
             return
         message_id = await sync_to_async(db.save_message)(
             from_user_id=self.teacher_tg_id,

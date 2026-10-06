@@ -28,6 +28,10 @@ from .sqlite_payloads import dialog_payload, message_payload
 
 
 logger = logging.getLogger(__name__)
+TEACHER_ACCESS_ERROR = (
+    "Цей Telegram-акаунт не має активної ролі викладача або адміністратора. "
+    "Перевірте акаунт і зверніться до адміністратора школи."
+)
 
 
 def _dialog_payloads(viewer_id):
@@ -65,9 +69,13 @@ def miniapp_auth(request):
     telegram_id = int(payload["user"]["id"])
     user = db.get_user(telegram_id)
     allowed_by_db = user and user[4] in ("teacher", "admin") and bool(user[9])
-    allowed_by_env = telegram_id in settings.TEACHER_MINIAPP_IDS
-    if not allowed_by_db and not allowed_by_env:
-        return JsonResponse({"error": "Teacher access required"}, status=403)
+    if not allowed_by_db:
+        logger.warning(
+            "Mini App access denied for user %s: role=%s active=%s env_listed=%s",
+            telegram_id, user[4] if user else None, user[9] if user else None,
+            telegram_id in settings.TEACHER_MINIAPP_IDS,
+        )
+        return JsonResponse({"error": TEACHER_ACCESS_ERROR}, status=403)
 
     return JsonResponse({
         "ws_token": issue_ws_token(telegram_id),
@@ -87,7 +95,9 @@ def miniapp_bootstrap(request):
 
     user = db.get_user(teacher_id)
     if not user or user[4] not in ("teacher", "admin") or not bool(user[9]):
-        return JsonResponse({"error": "Teacher access required"}, status=403)
+        logger.warning("Mini App bootstrap denied for user %s: role=%s active=%s",
+                       teacher_id, user[4] if user else None, user[9] if user else None)
+        return JsonResponse({"error": TEACHER_ACCESS_ERROR}, status=403)
 
     dialogs = _dialog_payloads(teacher_id)
     messages = [message_payload(row, teacher_id, user[4]) for row in db.get_miniapp_history(teacher_id)]
@@ -166,9 +176,6 @@ def miniapp_send_message(request):
     except Exception:
         return JsonResponse({"error": "Unauthorized"}, status=401)
 
-    if user[4] not in ("teacher", "admin"):
-        return JsonResponse({"error": "Teacher access required"}, status=403)
-
     try:
         student_id = int(request.POST.get("student_id", "0"))
     except ValueError:
@@ -191,15 +198,13 @@ def miniapp_send_message(request):
             student_id, text, reply_to_tg_message_id
         )
     except TelegramDeliveryError as exc:
-        if exc.requires_start:
-            return JsonResponse({
-                "error": "Учень ще не активував нового бота. Попросіть його відкрити бота й натиснути /start, тоді надішліть повідомлення повторно."
-            }, status=409)
-        logger.warning("Telegram text delivery failed for student %s: %s", student_id, exc)
-        return JsonResponse({"error": "Не вдалося надіслати повідомлення у Telegram. Спробуйте ще раз."}, status=502)
+        logger.warning("Telegram text delivery failed for student %s: HTTP %s %s",
+                       student_id, exc.status_code, exc.description)
+        return JsonResponse({"error": exc.user_message}, status=409 if exc.requires_start else 502)
     except Exception as exc:
-        logger.exception("Unexpected Telegram text delivery error for student %s: %s", student_id, exc)
-        return JsonResponse({"error": "Не вдалося надіслати повідомлення у Telegram. Спробуйте ще раз."}, status=502)
+        logger.warning("Unexpected Telegram text delivery error for student %s: %s",
+                       student_id, type(exc).__name__)
+        return JsonResponse({"error": "Зараз немає зв’язку з Telegram. Спробуйте ще раз трохи пізніше."}, status=502)
 
     message_id = db.save_message(
         from_user_id=user_id,
@@ -457,8 +462,13 @@ def miniapp_upload_attachment(request):
         )
     except Exception as exc:
         media_path.unlink(missing_ok=True)
-        logger.warning("Telegram attachment delivery failed for student %s: %s", student_id, exc)
-        return JsonResponse({"error": "Не вдалося надіслати файл у Telegram. Спробуйте ще раз"}, status=502)
+        if isinstance(exc, TelegramDeliveryError):
+            logger.warning("Telegram attachment delivery failed for student %s: HTTP %s %s",
+                           student_id, exc.status_code, exc.description)
+            return JsonResponse({"error": exc.user_message}, status=409 if exc.requires_start else 502)
+        logger.warning("Unexpected attachment delivery error for student %s: %s",
+                       student_id, type(exc).__name__)
+        return JsonResponse({"error": "Зараз немає зв’язку з Telegram. Спробуйте ще раз трохи пізніше."}, status=502)
 
     # A failed Telegram request must not leave a blank message in chat history.
     message_id = db.save_message(

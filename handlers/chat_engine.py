@@ -19,10 +19,12 @@ handlers/chat_engine.py — двигун P2P-чатів (учень ↔ викл
 
 import html
 import io
+import logging
 import sqlite3
 import asyncio
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, InputFile, WebAppInfo
+from telegram.error import NetworkError, TelegramError
 from telegram.ext import ContextTypes
 
 from database.db_manager import db
@@ -33,6 +35,10 @@ from config.settings import (
     now_kyiv_str, now_kyiv, ALL_MAIN_MENU_BUTTONS_LIST,
 )
 from services.miniapp_bridge import mirror_delete_to_miniapp, mirror_message_to_miniapp
+from utils.telegram_delivery import delivery_error_message
+
+
+logger = logging.getLogger(__name__)
 
 # ==========================================================================
 # СТАН АКТИВНОГО ЧАТУ (context.user_data)
@@ -508,7 +514,7 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     sender_role = state['role']
     kind = state['kind']
     peer_id = state['peer_id']
-    sender_full_name = f"{sender[2]} {sender[3]}"
+    sender_full_name = " ".join(part for part in (sender[2], sender[3]) if part) or sender[1] or str(sender_id)
     safe_sender = html.escape(sender_full_name)
 
     # --- Отримувачі ---
@@ -530,7 +536,8 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
         group_name = group_info[1]
         for m in db.get_group_members(peer_id):
             recipients.add(m[0])
-        if group_info[2]:
+        group_teacher = db.get_user(group_info[2]) if group_info[2] else None
+        if group_teacher and bool(group_teacher[9]):
             recipients.add(group_info[2])  # викладач групи
 
     recipients.discard(sender_id)
@@ -551,33 +558,6 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if media_type == 'text' and not content_text:
         return True  # порожнє — ігноруємо
-
-    # --- Збереження в БД (кожне повідомлення/файл окремо) ---
-    msg_db_id = None
-    try:
-        msg_db_id = db.save_message(
-            from_user_id=sender_id,
-            to_user_id=to_user_id_for_db,
-            group_id=group_id_for_db,
-            message_text=content_text,
-            message_type=media_type,
-            file_id=file_id,
-            original_filename=original_filename,
-            mime_type=mime_type,
-        )
-        # Фіксуємо оригінал у чаті відправника (щоб /del міг знайти повідомлення)
-        db.save_delivery(msg_db_id, sender_id, msg.message_id)
-        asyncio.create_task(mirror_message_to_miniapp(
-            sqlite_message_id=msg_db_id,
-            from_user_id=sender_id,
-            to_user_id=to_user_id_for_db,
-            message_text=content_text,
-            message_type=media_type,
-            file_id=file_id,
-            telegram_message_id=msg.message_id,
-        ))
-    except Exception as e:
-        print(f"[relay] db save error: {e}")
 
     # --- Заголовок ---
     now_str = now_kyiv_str()
@@ -604,10 +584,13 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
     lesson_link = is_lesson_link(content_text)
-    delivered = 0
+    delivered_copies = []
+    failures = []
 
     for r_id in recipients:
+        header_message_id = None
         try:
+            sent_ids = []
             if media_type == 'text':
                 sent_msg = await context.bot.send_message(
                     chat_id=r_id,
@@ -615,7 +598,7 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     parse_mode='HTML',
                     reply_markup=reply_markup
                 )
-                db.save_delivery(msg_db_id, r_id, sent_msg.message_id)
+                sent_ids.append(sent_msg.message_id)
                 if lesson_link:
                     try:
                         await context.bot.pin_chat_message(
@@ -632,7 +615,7 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         from_chat_id=msg.chat.id,
                         message_id=msg.message_id
                     )
-                    db.save_delivery(msg_db_id, r_id, copied.message_id)
+                    sent_ids.append(copied.message_id)
                 else:
                     caption = header + (f"\n\n{html.escape(content_text)}" if content_text else "")
                     if len(caption) > 1000:
@@ -645,39 +628,98 @@ async def relay_chat_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         parse_mode='HTML',
                         reply_markup=reply_markup
                     )
-                    db.save_delivery(msg_db_id, r_id, copied.message_id)
+                    sent_ids.append(copied.message_id)
 
             elif media_type == 'sticker':
                 header_msg = await context.bot.send_message(
                     chat_id=r_id, text=header, parse_mode='HTML',
                     reply_markup=reply_markup)
+                header_message_id = header_msg.message_id
                 sticker_msg = await context.bot.send_sticker(chat_id=r_id, sticker=msg.sticker.file_id)
-                db.save_delivery(msg_db_id, r_id, header_msg.message_id)
-                db.save_delivery(msg_db_id, r_id, sticker_msg.message_id)
+                sent_ids.extend((header_msg.message_id, sticker_msg.message_id))
 
             else:  # voice, video_note — не підтримують caption
                 header_msg = await context.bot.send_message(
                     chat_id=r_id, text=header, parse_mode='HTML',
                     reply_markup=reply_markup)
+                header_message_id = header_msg.message_id
                 copied = await context.bot.copy_message(
                     chat_id=r_id,
                     from_chat_id=msg.chat.id,
                     message_id=msg.message_id
                 )
-                db.save_delivery(msg_db_id, r_id, header_msg.message_id)
-                db.save_delivery(msg_db_id, r_id, copied.message_id)
+                sent_ids.extend((header_msg.message_id, copied.message_id))
 
-            delivered += 1
+            delivered_copies.extend((r_id, sent_id) for sent_id in sent_ids)
         except Exception as e:
-            print(f"[relay] delivery error to {r_id}: {e}")
+            if header_message_id:
+                try:
+                    await context.bot.delete_message(chat_id=r_id, message_id=header_message_id)
+                except Exception:
+                    logger.warning("Could not remove incomplete chat header for recipient %s", r_id)
+            detail = str(e) if isinstance(e, TelegramError) and not isinstance(e, NetworkError) else type(e).__name__
+            logger.warning("Chat delivery failed: sender=%s recipient=%s group=%s error=%s",
+                           sender_id, r_id, group_id_for_db, detail)
+            failures.append((r_id, delivery_error_message(detail)))
 
-    # Повідомляємо відправника ЛИШЕ у разі повної невдачі
-    if delivered == 0:
+    if delivered_copies:
         try:
-            await msg.reply_text(
-                "❌ Не вдалося доставити повідомлення. Можливо, отримувач заблокував бота.")
+            msg_db_id = db.save_message(
+                from_user_id=sender_id,
+                to_user_id=to_user_id_for_db,
+                group_id=group_id_for_db,
+                message_text=content_text,
+                message_type=media_type,
+                file_id=file_id,
+                original_filename=original_filename,
+                mime_type=mime_type,
+            )
+            db.save_delivery(msg_db_id, sender_id, msg.message_id)
+            for r_id, sent_id in delivered_copies:
+                db.save_delivery(msg_db_id, r_id, sent_id)
+            asyncio.create_task(mirror_message_to_miniapp(
+                sqlite_message_id=msg_db_id,
+                from_user_id=sender_id,
+                to_user_id=to_user_id_for_db,
+                message_text=content_text,
+                message_type=media_type,
+                file_id=file_id,
+                telegram_message_id=msg.message_id,
+            ))
         except Exception:
-            pass
+            logger.exception("Chat message was delivered but could not be saved: sender=%s group=%s",
+                             sender_id, group_id_for_db)
+            try:
+                await msg.reply_text("⚠️ Повідомлення доставлено, але історію чату не вдалося оновити.")
+            except Exception:
+                pass
+    elif mgid and not is_album_tail:
+        _album_header_sent.pop(mgid, None)
+
+    if failures:
+        if kind == 'individual':
+            failure_text = f"❌ Не вдалося доставити повідомлення. {failures[0][1]}"
+        else:
+            delivered_count = len(recipients) - len(failures)
+            lines = []
+            for failed_id, reason in failures[:4]:
+                try:
+                    failed_user = db.get_user(failed_id)
+                except Exception:
+                    failed_user = None
+                name = " ".join(part for part in (failed_user[2], failed_user[3]) if part) if failed_user else str(failed_id)
+                lines.append(f"• {name}: {reason}")
+            if len(failures) > 4:
+                lines.append(f"• І ще {len(failures) - 4} отримувачів")
+            failure_text = (
+                f"⚠️ Доставлено {delivered_count} із {len(recipients)} учасників. "
+                "Не отримали повідомлення:\n" + "\n".join(lines)
+            )
+        try:
+            await msg.reply_text(failure_text)
+        except Exception as exc:
+            logger.warning("Could not notify sender %s about delivery failure: %s",
+                           sender_id, type(exc).__name__)
 
     return True
 
